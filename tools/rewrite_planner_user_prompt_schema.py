@@ -99,6 +99,19 @@ def rewrite_row(row: dict[str, Any], operation_arg: str) -> tuple[dict[str, Any]
         operation=operation,
     )
     messages[0] = {**messages[0], "role": "user", "content": new_prompt}
+    # Patch assistant quadmask_spec.operation if missing
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "assistant":
+            try:
+                assistant_data = json.loads(msg["content"]) if isinstance(msg["content"], str) else msg["content"]
+                qs = assistant_data.get("quadmask_spec")
+                if isinstance(qs, dict) and not qs.get("operation"):
+                    qs["operation"] = operation
+                    assistant_data["quadmask_spec"] = qs
+                    messages[i] = {**msg, "content": json.dumps(assistant_data, ensure_ascii=False)}
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+            break
     out = {
         **row,
         "messages": messages,
