@@ -1,0 +1,14 @@
+{
+  "input_jsonl": "tests/fixtures/vlm_planner_sft_eval_v6_teacher_grounded_smoke.jsonl",
+  "output_jsonl": "tests/fixtures/vlm_planner_sft_eval_v6_teacher_grounded_smoke.jsonl",
+  "archive_path": null,
+  "rows": 1,
+  "planner_user_prompt_schema": "e2w.planner_io.v6_executable.v1",
+  "old_prompt_empty_quadmask_schema_count": 1,
+  "new_prompt_empty_quadmask_schema_count": 0,
+  "new_prompt_keyframes_count": 1,
+  "new_prompt_norm1000_count": 1,
+  "new_prompt_grid_count": 1,
+  "validation_failures": [],
+  "status": "ok"
+}
