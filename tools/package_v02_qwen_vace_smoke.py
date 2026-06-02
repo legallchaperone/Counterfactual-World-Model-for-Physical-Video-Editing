@@ -272,6 +272,8 @@ def main() -> None:
         flat_dir.mkdir(parents=True, exist_ok=True)
         paths = {}
         paths["original"] = symlink_file(planner["paths"].get("original_video"), flat_dir / "original.mp4")
+        paths["raw_output"] = symlink_file(planner["paths"].get("raw_output"), flat_dir / "raw_output.txt")
+        paths["raw_pred"] = symlink_file(planner["paths"].get("raw_pred"), flat_dir / "raw.pred.json")
         paths["edit_plan"] = symlink_file(planner["paths"].get("edit_plan"), flat_dir / "edit_plan.json")
         paths["quadmask_spec"] = symlink_file(planner["paths"].get("quadmask_spec"), flat_dir / "quadmask_spec.json")
         paths["primary_mask"] = symlink_file(mask["paths"].get("primary_mask"), flat_dir / "primary_mask.mp4")

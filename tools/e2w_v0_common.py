@@ -104,7 +104,17 @@ REMOVE_OPERATION_RE = re.compile(
     flags=re.I,
 )
 ADD_OPERATION_RE = re.compile(
-    r"\b(?:add|insert|place|put|create|introduce|include)\b",
+    r"\b(?:add|insert|place|put|introduce)\b",
+    flags=re.I,
+)
+REMOVAL_RESIDUE_RE = re.compile(
+    r"\b(?:remove|removed|removing|delete|deleted|erase|erased)\b|"
+    r"\b(?:absent|missing|gone)\b|"
+    r"\bmade absent\b|"
+    r"\bno longer visible\b|"
+    r"\brevealed area\b|"
+    r"\bpreviously occupied\b|"
+    r"\bwhere\b.+\b(?:was|were)\b",
     flags=re.I,
 )
 
@@ -335,11 +345,56 @@ def infer_operation_from_text(text: str | None) -> str | None:
 
 def infer_operation_from_sample(sample: dict[str, Any]) -> str | None:
     for message in sample.get("messages", []) or []:
-        if message.get("role") in {"user", "system"}:
+        if message.get("role") == "user":
             inferred = infer_operation_from_text(str(message.get("content") or ""))
             if inferred:
                 return inferred
     return infer_operation_from_text(str(sample.get("prompt") or sample.get("text") or ""))
+
+
+def _operation_from_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = re.sub(r"\s+", " ", str(value).strip().lower())
+    if normalized in SUPPORTED_OPERATIONS:
+        return normalized
+    return infer_operation_from_text(normalized)
+
+
+def infer_actual_operation_from_raw(raw: dict[str, Any], sample: dict[str, Any] | None = None) -> tuple[str, str]:
+    for key in ("operation", "task_type", "edit_type", "edit_operation", "action"):
+        inferred = _operation_from_value(raw.get(key))
+        if inferred:
+            return inferred, f"raw.{key}"
+    for key in ("edit_prompt", "user_prompt", "prompt"):
+        inferred = _operation_from_value(raw.get(key))
+        if inferred:
+            return inferred, f"raw.{key}"
+    raw_q = raw.get("quadmask_spec", {}) if isinstance(raw.get("quadmask_spec"), dict) else {}
+    inferred = _operation_from_value(raw_q.get("operation"))
+    if inferred:
+        return inferred, "raw.quadmask_spec.operation"
+    if sample is not None:
+        inferred = infer_operation_from_sample(sample)
+        if inferred:
+            return inferred, "sample.user_prompt"
+    return "remove", "default.remove"
+
+
+def resolve_expected_operation_with_source(
+    explicit_operation: str | None,
+    sample: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None]:
+    if explicit_operation and explicit_operation != "auto":
+        if explicit_operation not in SUPPORTED_OPERATIONS:
+            raise ValueError(f"Unsupported operation: {explicit_operation}")
+        return explicit_operation, "cli"
+    if sample is not None:
+        inferred = infer_operation_from_sample(sample)
+        if inferred:
+            return inferred, "sample.user_prompt"
+    return None, None
 
 
 def resolve_expected_operation(
@@ -347,20 +402,7 @@ def resolve_expected_operation(
     sample: dict[str, Any] | None = None,
     plan: dict[str, Any] | None = None,
 ) -> str | None:
-    if explicit_operation and explicit_operation != "auto":
-        if explicit_operation not in SUPPORTED_OPERATIONS:
-            raise ValueError(f"Unsupported operation: {explicit_operation}")
-        return explicit_operation
-    if sample is not None:
-        inferred = infer_operation_from_sample(sample)
-        if inferred:
-            return inferred
-    if plan is not None:
-        for key in ("user_prompt", "scene_summary"):
-            inferred = infer_operation_from_text(str(plan.get(key) or ""))
-            if inferred:
-                return inferred
-    return None
+    return resolve_expected_operation_with_source(explicit_operation, sample=sample, plan=plan)[0]
 
 
 def _first_target(raw: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
@@ -415,7 +457,7 @@ def normalize_to_e2w_contract(
     source: str = "planner_pred",
     operation: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    op = resolve_expected_operation(operation, sample=sample) or "remove"
+    op, _operation_source = infer_actual_operation_from_raw(raw, sample)
     target = _first_target(raw, sample)
     label = str(target.get("name") or infer_target_from_sample(sample)).strip()
     aliases = _strings(target.get("aliases"))
@@ -490,12 +532,15 @@ def normalize_to_e2w_contract(
     bbox = _bbox_from_raw(raw, width, height)
     point = _point_from_raw(raw, bbox, width, height)
     raw_q = raw.get("quadmask_spec", {}) if isinstance(raw.get("quadmask_spec"), dict) else {}
+    raw_primary = raw_q.get("primary", {}) if isinstance(raw_q.get("primary"), dict) else {}
     raw_affected = raw_q.get("affected", {}) if isinstance(raw_q.get("affected"), dict) else {}
     affected_labels = _strings(raw_affected.get("objects"))
     if isinstance(cfe, dict):
         affected_labels.extend(_strings(cfe.get("affected_regions")))
 
-    spec = {
+    spec = dict(raw_q)
+    spec.update(
+        {
         "schema_version": "e2w.quadmask_spec.v1",
         "operation": op,
         "source": source,
@@ -506,13 +551,14 @@ def normalize_to_e2w_contract(
             "reference_frame_indices": sample_indices(int(meta["frame_count"]), n=6),
         },
         "primary": {
+            **raw_primary,
             "label": label,
             "source": "planner_grounding",
             "first_frame_bbox": bbox,
             "point": point,
-            "negative_points": [],
+            "negative_points": raw_primary.get("negative_points", []),
             "prompt": label,
-            "grid_timeline": [],
+            "grid_timeline": raw_primary.get("grid_timeline", []),
         },
         "affected_regions": [
             {
@@ -528,7 +574,10 @@ def normalize_to_e2w_contract(
             for i, region in enumerate(dict.fromkeys(affected_labels))
         ],
         "keep": raw_q.get("keep", {}) if isinstance(raw_q.get("keep"), dict) else {},
-    }
+        }
+    )
+    if raw_affected:
+        spec["affected"] = raw_affected
     return edit_plan, spec
 
 
@@ -721,18 +770,26 @@ def validate_quadmask_spec_executor(spec: dict[str, Any], meta: dict[str, Any]) 
     }
 
 
-def validate_edit_plan(plan: dict[str, Any], expected_operation: str | None = None) -> dict[str, Any]:
+def validate_edit_plan(
+    plan: dict[str, Any],
+    expected_operation: str | None = None,
+    expected_operation_source: str | None = None,
+    actual_operation_source: str | None = None,
+) -> dict[str, Any]:
     details = plan.get("operation_details", {})
     scene = plan.get("edited_scene", {})
-    expected = resolve_expected_operation(expected_operation, plan=plan)
+    expected, inferred_expected_source = resolve_expected_operation_with_source(expected_operation, plan=plan)
     if expected is None:
         expected = "remove"
+        inferred_expected_source = "default.remove"
     actual = str(plan.get("operation") or "").strip()
     return {
         "schema_valid": all(k in plan for k in ["schema_version", "operation", "edit_subject", "operation_details", "edited_scene"]),
         "operation_accuracy": actual == expected,
         "expected_operation": expected,
         "actual_operation": actual,
+        "expected_operation_source": expected_operation_source or inferred_expected_source,
+        "actual_operation_source": actual_operation_source or "edit_plan.operation",
         "physical_consequences_nonempty": bool(_strings(details.get("physical_consequences") if isinstance(details, dict) else [])),
         "edited_scene_caption_nonempty": bool(str(scene.get("caption") if isinstance(scene, dict) else "").strip()),
         "edited_scene_outcome_effects_nonempty": bool(_strings(scene.get("outcome_effects") if isinstance(scene, dict) else [])),
@@ -846,10 +903,19 @@ def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
         return out
 
     def mentions_target(text: str) -> bool:
-        if operation == "add":
-            return False
         low = text.lower()
         return any(len(term) >= 3 and re.search(rf"\b{re.escape(term.lower())}\b", low) for term in target_terms)
+
+    def add_removal_residue_hits(text: str) -> list[str]:
+        hits = []
+        if REMOVAL_RESIDUE_RE.search(text):
+            hits.append(text)
+        low = text.lower()
+        for term in target_terms:
+            if len(term) >= 3 and re.search(rf"\b(?:no|without)\s+{re.escape(term.lower())}\b", low):
+                hits.append(text)
+                break
+        return hits
 
     def split_fragments(text: str) -> list[str]:
         return [fragment.strip() for fragment in re.split(r"(?<=[.!?])\s+", text.strip()) if fragment.strip()]
@@ -862,16 +928,26 @@ def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
     ]:
         for value in values:
             for fragment in split_fragments(value):
-                if mentions_target(fragment):
+                if operation == "add":
+                    for hit in add_removal_residue_hits(fragment):
+                        target_hits.append({"source": source_name, "fragment": hit})
+                elif mentions_target(fragment):
                     target_hits.append({"source": source_name, "fragment": fragment})
     if target_hits:
         sample_id = edit_plan.get("source_video_id") or "unknown"
         preview = "; ".join(f"{hit['source']}: {hit['fragment']}" for hit in target_hits[:3])
-        raise VacePromptContractError(
-            "VACE prompt contract violation: target-contaminated planner text "
-            f"for sample {sample_id}. Regenerate or fix the planner label; "
-            f"do not silently drop or fallback. Hits: {preview}"
-        )
+        if operation == "add":
+            raise VacePromptContractError(
+                "VACE prompt contract violation: removal-residue planner text "
+                f"for add sample {sample_id}. Regenerate or fix the planner label; "
+                f"do not silently drop or fallback. Hits: {preview}"
+            )
+        else:
+            raise VacePromptContractError(
+                "VACE prompt contract violation: target-contaminated planner text "
+                f"for sample {sample_id}. Regenerate or fix the planner label; "
+                f"do not silently drop or fallback. Hits: {preview}"
+            )
 
     def clean(text: str) -> str:
         out = text
@@ -912,7 +988,7 @@ def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
         cleaned: list[str] = []
         for value in values:
             for fragment in split_fragments(value):
-                if mentions_target(fragment):
+                if operation != "add" and mentions_target(fragment):
                     raise VacePromptContractError(f"Unexpected target term after precheck: {fragment}")
                 if looks_like_region_fragment(fragment):
                     continue
@@ -957,10 +1033,11 @@ def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
     if safe_consequences:
         lines.extend(["", "Physical consequences:"])
         lines.extend(f"- {x}" for x in safe_consequences)
-    count_sources = protected_objects
-    if operation == "add":
-        count_sources = _dedupe_strings(_strings(subject.get("label")) + count_sources)
-    count_constraints = _object_count_constraints(count_sources)
+    added_count_constraints = _object_count_constraints(_strings(subject.get("label"))) if operation == "add" else []
+    if added_count_constraints:
+        lines.extend(["", "Added target object count:"])
+        lines.extend(f"- {x}" for x in added_count_constraints)
+    count_constraints = _object_count_constraints(protected_objects)
     if count_constraints:
         lines.extend(["", "Visible non-target object counts to preserve:"])
         lines.extend(f"- {x}" for x in count_constraints)
@@ -1020,7 +1097,9 @@ def serialize_first_frame_prompt(edit_plan: dict[str, Any]) -> str:
         lines.append(f"Also remove local visual effects if visible: {'; '.join(effects)}.")
     elif effects:
         lines.append(f"Also add local visual effects if needed: {'; '.join(effects)}.")
-    if protected_objects:
+    if protected_objects and operation == "add":
+        lines.append(f"Protected existing objects, do not alter: {'; '.join(protected_objects)}.")
+    elif protected_objects:
         lines.append(f"Protected non-target objects, do not remove or alter: {'; '.join(protected_objects)}.")
     if preserve_regions:
         lines.append(f"Non-target content to keep visible and unchanged: {'; '.join(preserve_regions)}.")

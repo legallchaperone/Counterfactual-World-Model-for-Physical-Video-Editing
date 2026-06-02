@@ -215,13 +215,32 @@ def build_one(args: argparse.Namespace, planner_entry: dict[str, Any]) -> dict[s
     contact_dir.mkdir(parents=True, exist_ok=True)
 
     spec_path = Path(planner_entry["paths"]["quadmask_spec"])
+    started = time.time()
+    eval_path = mask_dir / "mask_eval.json"
+    if planner_entry.get("status") not in (None, "ok"):
+        result = {
+            "sample_id": sample_id,
+            "mode": args.mode,
+            "mask_valid": False,
+            "failure_source": "planner",
+            "reason": f"upstream planner status is {planner_entry.get('status')}",
+            "runtime_sec": time.time() - started,
+        }
+        write_json(eval_path, result)
+        return {
+            "stage": "mask_builder",
+            "sample_id": sample_id,
+            "mode": args.mode,
+            "status": "failed",
+            "failure_source": "planner",
+            "paths": {"quadmask_spec": str(spec_path), "mask_eval": str(eval_path)},
+            "metrics": result,
+        }
+
     video_path = Path(planner_entry["paths"]["original_video"])
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     meta = video_meta(video_path)
     spec_metrics = validate_quadmask_spec(spec, meta)
-    started = time.time()
-
-    eval_path = mask_dir / "mask_eval.json"
     if not spec_metrics["quadmask_spec_executable"]:
         result = {
             "sample_id": sample_id,

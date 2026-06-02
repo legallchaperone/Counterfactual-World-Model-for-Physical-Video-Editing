@@ -1,16 +1,22 @@
-# E2W v0.2 Forward Pass
+# E2W v0.3 Quadmask VACE Contract
 
-This repo currently standardizes the v0.2 Qwen + VACE smoke pipeline for one full forward pass over the 8 primary smoke samples.
+This repo currently standardizes the E2W smoke pipeline and the v0.3 VACE quadmask-control contract.
 
 Canonical code root: `/home/cwx/E2W`.
 
 Canonical data/artifact root: `/data/cwx/E2W`.
 
-Canonical successful run for comparison:
+Runtime contract:
+
+`docs/CONTRACT.md`
+
+Historical downstream-interface run for comparison:
 
 `/data/cwx/E2W/runs/e2w_v0_2_full_cuda_20260602T0720Z`
 
-That run completed planner, mask, Qwen first-frame edit, VACE generation, package, and artifact freshness checks. Its report shows:
+That run completed mask, Qwen first-frame edit, legacy VACE generation, package, and artifact freshness checks from older planner artifacts. It is useful for comparing downstream artifacts, but it is **not** proof that the SFT VLM planner was used.
+
+Its report shows:
 
 - samples: 8
 - system interface ok: 8/8
@@ -22,7 +28,19 @@ That run completed planner, mask, Qwen first-frame edit, VACE generation, packag
 
 Interface checks are not visual success checks. Human review must inspect the generated artifacts before marking visual success.
 
+Important: the reference v0.2 VACE stage did not consume `quadmask.npy`; it only saved/logged it. v0.3 is the first local runtime contract where VACE must receive and consume `quadmask.npy` through the E2W quad runner.
+
+## Version Overview
+
+| version | status | VACE behavior |
+|---|---|---|
+| `v0` | legacy | VACE consumes source video plus binary mask; quadmask is not semantic input. |
+| `v0.2` | frozen smoke | Every stage regenerates artifacts; canonical planner stage is SFT VLM planner inference; prompts/reports are strict; legacy VACE still does not consume quadmask. |
+| `v0.3` | current contract | VACE consumes `--quadmask_npy`, `--operation`, and binary generation mask through `tools/run_wan_vace_quad_i2v.py`. |
+
 ## Full Forward Pass
+
+This is the canonical full smoke forward pass. It has one valid planner path: run the SFT VLM planner checkpoint and save `raw_output.txt` plus `raw.pred.json` for every selected sample.
 
 Run from `/home/cwx/E2W` with the project env Python. Pick a free GPU first:
 
@@ -37,6 +55,10 @@ cd /home/cwx/E2W
 RUN_NAME=e2w_v0_2_forward_$(date -u +%Y%m%dT%H%M%SZ)
 /data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/run_v02_qwen_vace_smoke.py \
   --run-dir "/data/cwx/E2W/runs/$RUN_NAME" \
+  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval.jsonl \
+  --planner-adapter /data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v5_split_eval \
+  --base-model /data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct \
+  --operation remove \
   --cuda-visible-devices 4 \
   --run-vace
 ```
@@ -45,14 +67,60 @@ Replace `4` with the free physical GPU index. In Codex, the default sandbox may 
 
 The orchestrator regenerates artifacts in this order:
 
-1. `export_teacher_grounded_bundle.py`
+1. `eval_vlm_planner.py`
 2. `build_quadmask_from_spec.py`
 3. `run_first_frame_edit.py --backend qwen_image_edit`
 4. `run_vace_v0.py --run-vace`
 5. `package_v02_qwen_vace_smoke.py`
 6. `artifact_freshness.json`
 
-Do not use `tools/create_v02_qwen_vace_smoke_bundle.py` for v0.2 validation. It is retained only as a legacy/deprecated helper and must not be used as the canonical entrypoint because v0.2 requires freshly regenerated planner, mask, Qwen, and VACE artifacts.
+A clean run must contain `planner_pred/<sample-id>/raw_output.txt` and `planner_pred/<sample-id>/raw.pred.json` for every sample. If those files are missing, the run did not use the SFT VLM planner and is not a valid forward pass.
+
+## v0.3 Quadmask VACE
+
+v0.3 upgrades the VACE stage contract. It does not claim trained visual control yet.
+
+Canonical v0.3 direct experiment wrapper:
+
+```bash
+tools/run_vace_v03_quad_experiment.py
+```
+
+That wrapper calls:
+
+```bash
+tools/run_wan_vace_quad_i2v.py
+```
+
+The quad runner expands the Wan-VACE control/context branch from the legacy 96-channel input to a 416-channel E2W context and records:
+
+- `quadmask_passed_to_backend_command`
+- `quadmask_consumed_by_backend`
+- `quadmask_backend: e2w_quad_i2v`
+- `quadmask_alignment`
+- `generation_mask_mode`
+
+The binary generation mask only says where VACE may generate. The semantic edit mask remains `quadmask.npy` with values `0/63/127/255`.
+
+Requested add-mug experiment template:
+
+```bash
+cd /home/cwx/E2W
+RUN_DIR=/data/cwx/E2W/runs/e2w_v0_3_quad_vace_add_0076_$(date -u +%Y%m%dT%H%M%SZ)
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/run_vace_v03_quad_experiment.py \
+  --src-video /home/cwx/E2W/runs/e2w_v0_2_full_cuda_20260602T0720Z/0076/edited_video.mp4 \
+  --prompt "Add a yellow mug on the rotating turntable in front of the spotlight" \
+  --quadmask-npy /home/cwx/E2W/runs/e2w_v0_2_full_cuda_20260602T0720Z/0076/quadmask.npy \
+  --operation add \
+  --run-dir "$RUN_DIR" \
+  --generation-mask-mode quadmask-editable \
+  --align-quadmask nearest \
+  --cuda-visible-devices 4 \
+  --sample-steps 8 \
+  --run-vace
+```
+
+For `0076`, explicit `--align-quadmask nearest` is required because the v0.2 quadmask has 80 frames and the input VACE video has 81 frames.
 
 ## Required Gates
 
@@ -66,6 +134,7 @@ cat "$RUN_DIR/artifact_freshness.json"
 
 Required machine gates:
 
+- planner artifacts include 8 `raw_output.txt` files and 8 `raw.pred.json` files
 - `artifact_freshness.json`: `all_critical_stages_regenerated: true`
 - `artifact_freshness.json`: `no_other_run_symlinks: true`
 - manifest contains 8 `planner_eval`, 8 `mask_builder`, 8 `first_frame`, and 8 `vace_v0` entries
@@ -93,6 +162,9 @@ Expected files include Qwen prompt, edited first frame, VACE prompt, VACE condit
 - If no target-free semantic line remains for the VACE prompt, fail instead of using generic neutral text.
 - When a visible non-target object count is clear and relevant, preserve it explicitly in planner/VACE text, for example `one potato`.
 - v0 records quadmask/frame-count mismatches as warnings. Do not treat those warnings as visual success or failure unless the stage contract changes.
+- v0.3 must record quadmask frame/shape alignment explicitly. Silent frame mismatch is not allowed.
+- v0.3 can report `quadmask_passed_to_backend_command: true` only when the command contains `--quadmask_npy`, `--operation`, and `--generation_mask`.
+- v0.3 can report `quadmask_consumed_by_backend: true` only when that command actually ran successfully and produced `edited_video.mp4`.
 
 ## Static Validation
 
@@ -103,4 +175,4 @@ cd /home/cwx/E2W
 /data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests/test_v02_contracts.py
 ```
 
-This checks prompt contracts, report semantics, VACE failure attribution, and explicit `CUDA_VISIBLE_DEVICES` propagation in the canonical runner.
+This checks prompt contracts, report semantics, VACE failure attribution, v0.3 quad VACE interface helpers, and explicit `CUDA_VISIBLE_DEVICES` propagation in the canonical runner.

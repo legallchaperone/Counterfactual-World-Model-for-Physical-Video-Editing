@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a fresh E2W v0.2 Qwen + VACE smoke pipeline."""
+"""Run a fresh E2W VLM-planner + Qwen + VACE smoke pipeline."""
 
 from __future__ import annotations
 
@@ -20,9 +20,11 @@ from e2w_v0_common import ensure_run_dirs, load_manifest, write_json  # noqa: E4
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_DIR = Path(__file__).resolve().parent
 RUNS_ROOT = REPO_ROOT / "runs"
-DEFAULT_INPUT = REPO_ROOT / "data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl"
+DEFAULT_INPUT = REPO_ROOT / "data/physics_iq_vlm_sft/vlm_planner_sft_eval.jsonl"
 DEFAULT_MODE = "mode_v0_2_qwen_vace_smoke"
 DEFAULT_SAMPLES = ["0052", "0056", "0070", "0076", "0112", "0077", "0341", "0128"]
+DEFAULT_PLANNER_ADAPTER = Path("/data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v5_split_eval")
+DEFAULT_BASE_MODEL = Path("/data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct")
 DEFAULT_QWEN_IMAGE_EDIT = Path("/data/cwx/Edit2World-unified/checkpoints/Qwen-Image-Edit")
 DEFAULT_VACE_REPO = Path("/data/cwx/Edit2World-unified/external/VACE")
 DEFAULT_VACE_CKPT = Path("/data/cwx/Edit2World-unified/checkpoints/Wan2.1-VACE-14B")
@@ -35,7 +37,7 @@ STAGE_ENTRY_NAMES = {
     "vace": "vace_v0",
 }
 CRITICAL_KEYS = {
-    "planner": {"raw_teacher", "edit_plan", "quadmask_spec", "vace_prompt", "planner_eval", "text_query", "first_frame"},
+    "planner": {"raw_output", "raw_pred", "edit_plan", "quadmask_spec", "vace_prompt", "planner_eval", "text_query", "first_frame"},
     "mask": {"source_clip", "primary_mask", "affected_mask", "editable_mask", "quadmask_npy", "quadmask", "mask_eval"},
     "first_frame": {"primary_mask_frame0", "first_frame_prompt", "edited_first_frame", "first_frame_metadata"},
     "vace": {"vace_prompt", "vace_conditioning", "vace_generation_mask", "vace_command", "vace_metadata"},
@@ -49,6 +51,13 @@ def utc_now() -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-jsonl", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument("--planner-adapter", type=Path, default=DEFAULT_PLANNER_ADAPTER)
+    parser.add_argument("--base-model", type=Path, default=DEFAULT_BASE_MODEL)
+    parser.add_argument("--operation", choices=["auto", "remove", "add"], default="auto")
+    parser.add_argument("--planner-max-new-tokens", type=int, default=1536)
+    parser.add_argument("--planner-video-fps", type=float, default=1.0)
+    parser.add_argument("--planner-min-pixels", type=int, default=50176)
+    parser.add_argument("--planner-max-pixels", type=int, default=100352)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--run-name")
     parser.add_argument("--mode", default=DEFAULT_MODE)
@@ -327,13 +336,27 @@ def main() -> None:
             "planner",
             [
                 py,
-                str(TOOLS_DIR / "export_teacher_grounded_bundle.py"),
-                "--input-jsonl",
+                str(TOOLS_DIR / "eval_vlm_planner.py"),
+                "--split-jsonl",
                 str(args.input_jsonl),
                 "--run-dir",
                 str(run_dir),
                 "--mode",
                 args.mode,
+                "--adapter",
+                str(args.planner_adapter),
+                "--base-model",
+                str(args.base_model),
+                "--operation",
+                args.operation,
+                "--max-new-tokens",
+                str(args.planner_max_new_tokens),
+                "--video-fps",
+                str(args.planner_video_fps),
+                "--min-pixels",
+                str(args.planner_min_pixels),
+                "--max-pixels",
+                str(args.planner_max_pixels),
                 *sample_args(sample_ids),
                 *force_args,
             ],

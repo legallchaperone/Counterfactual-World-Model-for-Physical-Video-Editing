@@ -28,11 +28,12 @@ from e2w_v0_common import (  # noqa: E402
     DEFAULT_SPLIT,
     ensure_run_dirs,
     extract_first_frame,
+    infer_actual_operation_from_raw,
     link_or_copy,
     load_jsonl,
     normalize_to_e2w_contract,
     parse_json_output,
-    resolve_expected_operation,
+    resolve_expected_operation_with_source,
     serialize_vace_prompt,
     summarize_boolean_metrics,
     validate_edit_plan,
@@ -67,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-jsonl", type=Path, default=DEFAULT_SPLIT)
     parser.add_argument("--adapter", type=Path, default=DEFAULT_PLANNER)
     parser.add_argument("--base-model", type=Path, default=DEFAULT_BASE_MODEL)
+    parser.add_argument("--mode", default="mode_vlm_planner_pred")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--sample-id", action="append", default=[])
     parser.add_argument("--max-new-tokens", type=int, default=1536)
@@ -80,6 +82,11 @@ def parse_args() -> argparse.Namespace:
         help="Expected edit operation. auto infers add/remove from the sample prompt.",
     )
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--allow-failures",
+        action="store_true",
+        help="Write planner artifacts but return 0 even when one or more selected samples fail planner validation.",
+    )
     return parser.parse_args()
 
 
@@ -184,21 +191,26 @@ def process_sample(args: argparse.Namespace, processor: Any, model: Any, sample:
         return {
             "stage": "planner_eval",
             "sample_id": sample_id,
-            "mode": "planner_pred",
+            "mode": args.mode,
             "status": "planner_parse_failed",
             "paths": {**source_paths, "raw_output": str(raw_path), "planner_eval": str(pred_dir / "planner_eval.json")},
             "metrics": metrics,
         }
 
-    expected_operation = resolve_expected_operation(args.operation, sample=sample)
+    expected_operation, expected_operation_source = resolve_expected_operation_with_source(args.operation, sample=sample)
+    _actual_operation, actual_operation_source = infer_actual_operation_from_raw(raw_json, sample)
     edit_plan, quadmask_spec = normalize_to_e2w_contract(
         raw_json,
         sample,
         meta,
         source="planner_pred",
-        operation=expected_operation,
     )
-    plan_metrics = validate_edit_plan(edit_plan, expected_operation=expected_operation)
+    plan_metrics = validate_edit_plan(
+        edit_plan,
+        expected_operation=expected_operation,
+        expected_operation_source=expected_operation_source,
+        actual_operation_source=actual_operation_source,
+    )
     spec_metrics = validate_quadmask_spec(quadmask_spec, meta)
     metrics.update(plan_metrics)
     metrics.update(spec_metrics)
@@ -210,12 +222,18 @@ def process_sample(args: argparse.Namespace, processor: Any, model: Any, sample:
     write_json(pred_dir / "quadmask_spec.json", quadmask_spec)
     write_text(pred_dir / "vace_prompt.txt", serialize_vace_prompt(edit_plan))
     write_json(pred_dir / "planner_eval.json", metrics)
+    if not metrics["schema_valid"]:
+        status = "planner_schema_failed"
+    elif not metrics["operation_accuracy"]:
+        status = "operation_mismatch"
+    else:
+        status = "ok"
 
     return {
         "stage": "planner_eval",
         "sample_id": sample_id,
-        "mode": "planner_pred",
-        "status": "ok" if metrics["schema_valid"] else "planner_schema_failed",
+        "mode": args.mode,
+        "status": status,
         "paths": {
             **source_paths,
             "raw_output": str(raw_path),
@@ -257,6 +275,9 @@ def main() -> None:
             "split_jsonl": str(args.split_jsonl),
             "adapter": str(args.adapter),
             "base_model": str(args.base_model),
+            "mode": args.mode,
+            "planner_backend": "vlm_sft_qwen2.5_vl_lora",
+            "label_source": "planner_pred",
             "generation": {
                 "temperature": 0,
                 "top_p": 1,
@@ -273,6 +294,30 @@ def main() -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     print(json.dumps(summary, indent=2, sort_keys=True))
+    if not args.allow_failures:
+        failed = [entry for entry in manifest_rows if entry.get("status") != "ok"]
+        if failed:
+            print(
+                json.dumps(
+                    {
+                        "planner_failures": [
+                            {
+                                "sample_id": entry.get("sample_id"),
+                                "status": entry.get("status"),
+                                "parse_error": (entry.get("metrics") or {}).get("parse_error"),
+                                "operation_accuracy": (entry.get("metrics") or {}).get("operation_accuracy"),
+                                "schema_valid": (entry.get("metrics") or {}).get("schema_valid"),
+                                "quadmask_spec_executable": (entry.get("metrics") or {}).get("quadmask_spec_executable"),
+                            }
+                            for entry in failed
+                        ]
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

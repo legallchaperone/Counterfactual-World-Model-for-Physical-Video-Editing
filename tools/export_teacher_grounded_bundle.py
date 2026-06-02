@@ -13,10 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e2w_v0_common import (  # noqa: E402
     ensure_run_dirs,
     extract_first_frame,
+    infer_actual_operation_from_raw,
     link_or_copy,
     load_jsonl,
     normalize_to_e2w_contract,
-    resolve_expected_operation,
+    resolve_expected_operation_with_source,
     serialize_vace_prompt,
     summarize_boolean_metrics,
     validate_edit_plan,
@@ -104,15 +105,14 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> tuple[dict[str
     sample_id = row["id"]
     raw = assistant_json(row)
     meta = video_meta(Path(row["video"]))
-    expected_operation = resolve_expected_operation(args.operation, sample=row)
-    edit_plan, _ = normalize_to_e2w_contract(
+    expected_operation, expected_operation_source = resolve_expected_operation_with_source(args.operation, sample=row)
+    _actual_operation, actual_operation_source = infer_actual_operation_from_raw(raw, row)
+    edit_plan, quadmask_spec = normalize_to_e2w_contract(
         raw,
         row,
         meta,
         source="teacher_executable_v6",
-        operation=expected_operation,
     )
-    quadmask_spec = raw.get("quadmask_spec")
     if not isinstance(quadmask_spec, dict):
         raise ValueError(f"Missing quadmask_spec for sample {sample_id}")
 
@@ -120,7 +120,12 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> tuple[dict[str
     pred_dir = args.run_dir / "planner_pred" / sample_id
     pred_dir.mkdir(parents=True, exist_ok=True)
 
-    plan_metrics = validate_edit_plan(edit_plan, expected_operation=expected_operation)
+    plan_metrics = validate_edit_plan(
+        edit_plan,
+        expected_operation=expected_operation,
+        expected_operation_source=expected_operation_source,
+        actual_operation_source=actual_operation_source,
+    )
     spec_metrics = validate_quadmask_spec(quadmask_spec, meta)
     metrics = {
         "sample_id": sample_id,
@@ -140,12 +145,18 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> tuple[dict[str
     write_json(pred_dir / "quadmask_spec.json", quadmask_spec)
     write_text(pred_dir / "vace_prompt.txt", serialize_vace_prompt(edit_plan))
     write_json(pred_dir / "planner_eval.json", metrics)
+    if not metrics["schema_valid"] or not metrics["executor_valid"]:
+        status = "teacher_schema_failed"
+    elif not metrics["operation_accuracy"]:
+        status = "operation_mismatch"
+    else:
+        status = "ok"
 
     entry = {
         "stage": "planner_eval",
         "sample_id": sample_id,
         "mode": args.mode,
-        "status": "ok" if metrics["schema_valid"] and metrics["executor_valid"] else "teacher_schema_failed",
+        "status": status,
         "paths": {
             **source_paths,
             "raw_teacher": str(pred_dir / "raw.teacher.json"),
