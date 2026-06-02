@@ -26,6 +26,7 @@ from e2w_v0_common import (  # noqa: E402
     DEFAULT_PLANNER,
     DEFAULT_RUN_DIR,
     DEFAULT_SPLIT,
+    VacePromptContractError,
     ensure_run_dirs,
     extract_first_frame,
     infer_actual_operation_from_raw,
@@ -220,12 +221,25 @@ def process_sample(args: argparse.Namespace, processor: Any, model: Any, sample:
     write_json(pred_dir / "edit_plan.json", edit_plan)
     write_json(pred_dir / "quadmask_spec.pred.json", quadmask_spec)
     write_json(pred_dir / "quadmask_spec.json", quadmask_spec)
-    write_text(pred_dir / "vace_prompt.txt", serialize_vace_prompt(edit_plan))
+    vace_prompt_path = pred_dir / "vace_prompt.txt"
+    vace_prompt_error = None
+    try:
+        write_text(vace_prompt_path, serialize_vace_prompt(edit_plan))
+        metrics["vace_prompt_contract_ok"] = True
+        metrics["vace_prompt_contract_error"] = None
+    except VacePromptContractError as exc:
+        vace_prompt_error = str(exc)
+        metrics["vace_prompt_contract_ok"] = False
+        metrics["vace_prompt_contract_error"] = vace_prompt_error
     write_json(pred_dir / "planner_eval.json", metrics)
     if not metrics["schema_valid"]:
         status = "planner_schema_failed"
     elif not metrics["operation_accuracy"]:
         status = "operation_mismatch"
+    elif not metrics["quadmask_spec_executable"]:
+        status = "planner_quadmask_failed"
+    elif vace_prompt_error:
+        status = "vace_prompt_contract_failed"
     else:
         status = "ok"
 
@@ -240,7 +254,7 @@ def process_sample(args: argparse.Namespace, processor: Any, model: Any, sample:
             "raw_pred": str(pred_dir / "raw.pred.json"),
             "edit_plan": str(pred_dir / "edit_plan.pred.json"),
             "quadmask_spec": str(pred_dir / "quadmask_spec.pred.json"),
-            "vace_prompt": str(pred_dir / "vace_prompt.txt"),
+            "vace_prompt": str(vace_prompt_path) if not vace_prompt_error else None,
             "planner_eval": str(pred_dir / "planner_eval.json"),
         },
         "metrics": metrics,
@@ -308,6 +322,8 @@ def main() -> None:
                                 "operation_accuracy": (entry.get("metrics") or {}).get("operation_accuracy"),
                                 "schema_valid": (entry.get("metrics") or {}).get("schema_valid"),
                                 "quadmask_spec_executable": (entry.get("metrics") or {}).get("quadmask_spec_executable"),
+                                "vace_prompt_contract_ok": (entry.get("metrics") or {}).get("vace_prompt_contract_ok"),
+                                "vace_prompt_contract_error": (entry.get("metrics") or {}).get("vace_prompt_contract_error"),
                             }
                             for entry in failed
                         ]
