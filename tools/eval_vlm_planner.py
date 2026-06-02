@@ -32,6 +32,7 @@ from e2w_v0_common import (  # noqa: E402
     load_jsonl,
     normalize_to_e2w_contract,
     parse_json_output,
+    resolve_expected_operation,
     serialize_vace_prompt,
     summarize_boolean_metrics,
     validate_edit_plan,
@@ -72,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--video-fps", type=float, default=1.0)
     parser.add_argument("--min-pixels", type=int, default=50176)
     parser.add_argument("--max-pixels", type=int, default=100352)
+    parser.add_argument(
+        "--operation",
+        choices=["auto", "remove", "add"],
+        default="auto",
+        help="Expected edit operation. auto infers add/remove from the sample prompt.",
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -183,8 +190,15 @@ def process_sample(args: argparse.Namespace, processor: Any, model: Any, sample:
             "metrics": metrics,
         }
 
-    edit_plan, quadmask_spec = normalize_to_e2w_contract(raw_json, sample, meta, source="planner_pred")
-    plan_metrics = validate_edit_plan(edit_plan)
+    expected_operation = resolve_expected_operation(args.operation, sample=sample)
+    edit_plan, quadmask_spec = normalize_to_e2w_contract(
+        raw_json,
+        sample,
+        meta,
+        source="planner_pred",
+        operation=expected_operation,
+    )
+    plan_metrics = validate_edit_plan(edit_plan, expected_operation=expected_operation)
     spec_metrics = validate_quadmask_spec(quadmask_spec, meta)
     metrics.update(plan_metrics)
     metrics.update(spec_metrics)

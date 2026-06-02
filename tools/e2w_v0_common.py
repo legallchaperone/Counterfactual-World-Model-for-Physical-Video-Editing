@@ -98,6 +98,15 @@ QUANTITY_PREFIX_RE = re.compile(
     r")\b",
     flags=re.I,
 )
+SUPPORTED_OPERATIONS = {"remove", "add"}
+REMOVE_OPERATION_RE = re.compile(
+    r"\b(?:remove|delete|erase|take\s+away|make\s+absent|get\s+rid\s+of)\b",
+    flags=re.I,
+)
+ADD_OPERATION_RE = re.compile(
+    r"\b(?:add|insert|place|put|create|introduce|include)\b",
+    flags=re.I,
+)
 
 
 class VacePromptContractError(ValueError):
@@ -311,6 +320,49 @@ def infer_target_from_sample(sample: dict[str, Any]) -> str:
     return "target object"
 
 
+def infer_operation_from_text(text: str | None) -> str | None:
+    """Infer an edit operation from user-facing text when it is unambiguous."""
+    if not text:
+        return None
+    has_add = ADD_OPERATION_RE.search(text) is not None
+    has_remove = REMOVE_OPERATION_RE.search(text) is not None
+    if has_add and not has_remove:
+        return "add"
+    if has_remove and not has_add:
+        return "remove"
+    return None
+
+
+def infer_operation_from_sample(sample: dict[str, Any]) -> str | None:
+    for message in sample.get("messages", []) or []:
+        if message.get("role") in {"user", "system"}:
+            inferred = infer_operation_from_text(str(message.get("content") or ""))
+            if inferred:
+                return inferred
+    return infer_operation_from_text(str(sample.get("prompt") or sample.get("text") or ""))
+
+
+def resolve_expected_operation(
+    explicit_operation: str | None,
+    sample: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+) -> str | None:
+    if explicit_operation and explicit_operation != "auto":
+        if explicit_operation not in SUPPORTED_OPERATIONS:
+            raise ValueError(f"Unsupported operation: {explicit_operation}")
+        return explicit_operation
+    if sample is not None:
+        inferred = infer_operation_from_sample(sample)
+        if inferred:
+            return inferred
+    if plan is not None:
+        for key in ("user_prompt", "scene_summary"):
+            inferred = infer_operation_from_text(str(plan.get(key) or ""))
+            if inferred:
+                return inferred
+    return None
+
+
 def _first_target(raw: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
     targets = raw.get("target_objects")
     if isinstance(targets, list) and targets and isinstance(targets[0], dict):
@@ -361,7 +413,9 @@ def normalize_to_e2w_contract(
     sample: dict[str, Any],
     meta: dict[str, Any],
     source: str = "planner_pred",
+    operation: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    op = resolve_expected_operation(operation, sample=sample) or "remove"
     target = _first_target(raw, sample)
     label = str(target.get("name") or infer_target_from_sample(sample)).strip()
     aliases = _strings(target.get("aliases"))
@@ -385,19 +439,26 @@ def normalize_to_e2w_contract(
         scene_caption = str(cfe.get("if_removed") or "").strip()
         outcome_effects.extend(counterfactual_outcomes)
     preserve_regions = _strings(cfe.get("unchanged_regions") if isinstance(cfe, dict) else [])
-    local_fill_instruction = "Fill target pixels with plausible local background consistent with neighboring pixels."
+    if op == "add":
+        local_fill_instruction = "Place the target object naturally in the specified local area while preserving neighboring pixels."
+        role = "add_target"
+        user_prompt = f"add {label}"
+    else:
+        local_fill_instruction = "Fill target pixels with plausible local background consistent with neighboring pixels."
+        role = "remove_target"
+        user_prompt = f"remove {label}"
 
     edit_plan = {
         "schema_version": "e2w.edit_plan.v1",
-        "operation": "remove",
-        "user_prompt": f"remove {label}",
+        "operation": op,
+        "user_prompt": user_prompt,
         "scene_summary": str(raw.get("event_summary") or "").strip(),
         "observed_dynamics": [x for x in observed_dynamics[:3]],
         "edit_subject": {
             "id": target_id,
             "label": label,
             "aliases": aliases,
-            "role": "remove_target",
+            "role": role,
             "scope": "single_object",
             "visual_descriptor": str(target.get("location_description") or label),
             "included_parts": [label],
@@ -436,7 +497,7 @@ def normalize_to_e2w_contract(
 
     spec = {
         "schema_version": "e2w.quadmask_spec.v1",
-        "operation": "remove",
+        "operation": op,
         "source": source,
         "grid": {
             "rows": 14,
@@ -660,12 +721,18 @@ def validate_quadmask_spec_executor(spec: dict[str, Any], meta: dict[str, Any]) 
     }
 
 
-def validate_edit_plan(plan: dict[str, Any]) -> dict[str, Any]:
+def validate_edit_plan(plan: dict[str, Any], expected_operation: str | None = None) -> dict[str, Any]:
     details = plan.get("operation_details", {})
     scene = plan.get("edited_scene", {})
+    expected = resolve_expected_operation(expected_operation, plan=plan)
+    if expected is None:
+        expected = "remove"
+    actual = str(plan.get("operation") or "").strip()
     return {
         "schema_valid": all(k in plan for k in ["schema_version", "operation", "edit_subject", "operation_details", "edited_scene"]),
-        "operation_accuracy": plan.get("operation") == "remove",
+        "operation_accuracy": actual == expected,
+        "expected_operation": expected,
+        "actual_operation": actual,
         "physical_consequences_nonempty": bool(_strings(details.get("physical_consequences") if isinstance(details, dict) else [])),
         "edited_scene_caption_nonempty": bool(str(scene.get("caption") if isinstance(scene, dict) else "").strip()),
         "edited_scene_outcome_effects_nonempty": bool(_strings(scene.get("outcome_effects") if isinstance(scene, dict) else [])),
@@ -747,6 +814,7 @@ def summarize_boolean_metrics(rows: list[dict[str, Any]], keys: list[str]) -> di
 def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
     scene = edit_plan.get("edited_scene", {}) if isinstance(edit_plan.get("edited_scene"), dict) else {}
     details = edit_plan.get("operation_details", {}) if isinstance(edit_plan.get("operation_details"), dict) else {}
+    operation = str(edit_plan.get("operation") or "remove").strip().lower()
     caption = str(scene.get("caption") or "").strip()
     outcomes = _strings(scene.get("outcome_effects"))
     consequences = _strings(details.get("physical_consequences"))
@@ -778,6 +846,8 @@ def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
         return out
 
     def mentions_target(text: str) -> bool:
+        if operation == "add":
+            return False
         low = text.lower()
         return any(len(term) >= 3 and re.search(rf"\b{re.escape(term.lower())}\b", low) for term in target_terms)
 
@@ -807,10 +877,11 @@ def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
         out = text
         for bad, repl in FORBIDDEN_VACE_WORDS.items():
             out = re.sub(rf"\b{re.escape(bad)}\b", repl, out, flags=re.I)
-        for term in sorted(target_terms, key=len, reverse=True):
-            if len(term) < 3:
-                continue
-            out = re.sub(rf"\b{re.escape(term)}\b", "the edited subject", out, flags=re.I)
+        if operation != "add":
+            for term in sorted(target_terms, key=len, reverse=True):
+                if len(term) < 3:
+                    continue
+                out = re.sub(rf"\b{re.escape(term)}\b", "the edited subject", out, flags=re.I)
         out = apply_count_wording(out)
         return out.strip()
 
@@ -886,7 +957,10 @@ def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
     if safe_consequences:
         lines.extend(["", "Physical consequences:"])
         lines.extend(f"- {x}" for x in safe_consequences)
-    count_constraints = _object_count_constraints(protected_objects)
+    count_sources = protected_objects
+    if operation == "add":
+        count_sources = _dedupe_strings(_strings(subject.get("label")) + count_sources)
+    count_constraints = _object_count_constraints(count_sources)
     if count_constraints:
         lines.extend(["", "Visible non-target object counts to preserve:"])
         lines.extend(f"- {x}" for x in count_constraints)
@@ -904,6 +978,7 @@ def serialize_first_frame_prompt(edit_plan: dict[str, Any]) -> str:
     details = edit_plan.get("operation_details", {}) if isinstance(edit_plan.get("operation_details"), dict) else {}
     scene = edit_plan.get("edited_scene", {}) if isinstance(edit_plan.get("edited_scene"), dict) else {}
     target = details.get("target_object", {}) if isinstance(details.get("target_object"), dict) else {}
+    operation = str(edit_plan.get("operation") or "remove").strip().lower()
     target_label = str(subject.get("label") or target.get("label") or "the specified target object").strip()
     target_phrase = target_label if target_label.lower().startswith(("the ", "a ", "an ")) else f"the {target_label}"
     aliases = [x for x in _strings(subject.get("aliases")) if x.lower() != target_label.lower()]
@@ -920,21 +995,31 @@ def serialize_first_frame_prompt(edit_plan: dict[str, Any]) -> str:
     if not preserve_regions:
         preserve_regions = prompt_items(details.get("expected_background"))
     protected_objects = prompt_items(details.get("protected_objects"), subject.get("excluded_non_target_parts"))
-    effects = _strings(details.get("visual_effects_to_remove"))
-    local_fill_instruction = str(details.get("local_fill_instruction") or "").strip()
-    if not local_fill_instruction:
-        local_fill_instruction = "Fill only the pixels where the target object was with plausible local background consistent with neighboring pixels."
-
-    lines = [
-        f"Remove only {target_phrase} from this image.",
-    ]
+    if operation == "add":
+        effects = _strings(details.get("visual_effects_to_add"))
+        local_fill_instruction = str(details.get("local_fill_instruction") or "").strip()
+        if not local_fill_instruction:
+            local_fill_instruction = f"Place {target_phrase} naturally in the scene with plausible contact, scale, lighting, and shadows."
+        lines = [
+            f"Add {target_phrase} to this image.",
+        ]
+    else:
+        effects = _strings(details.get("visual_effects_to_remove"))
+        local_fill_instruction = str(details.get("local_fill_instruction") or "").strip()
+        if not local_fill_instruction:
+            local_fill_instruction = "Fill only the pixels where the target object was with plausible local background consistent with neighboring pixels."
+        lines = [
+            f"Remove only {target_phrase} from this image.",
+        ]
     if aliases:
         lines.append(f"Target aliases: {'; '.join(aliases)}.")
     if visual_descriptor and visual_descriptor.lower() != target_label.lower():
         lines.append(f"Target visual description: {visual_descriptor.rstrip('.')}.")
     lines.append(local_fill_instruction.rstrip(".") + ".")
-    if effects:
+    if effects and operation == "remove":
         lines.append(f"Also remove local visual effects if visible: {'; '.join(effects)}.")
+    elif effects:
+        lines.append(f"Also add local visual effects if needed: {'; '.join(effects)}.")
     if protected_objects:
         lines.append(f"Protected non-target objects, do not remove or alter: {'; '.join(protected_objects)}.")
     if preserve_regions:

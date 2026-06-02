@@ -19,9 +19,11 @@ sys.path.insert(0, str(TOOLS))
 
 from e2w_v0_common import (  # noqa: E402
     VacePromptContractError,
+    infer_operation_from_text,
     normalize_to_e2w_contract,
     serialize_first_frame_prompt,
     serialize_vace_prompt,
+    validate_edit_plan,
 )
 import package_v02_qwen_vace_smoke as package_v02  # noqa: E402
 import physics_iq_vlm_pipeline  # noqa: E402
@@ -153,6 +155,45 @@ class V02PromptContractTests(unittest.TestCase):
         self.assertIn("visible target subpart", rules)
         self.assertIn("visible count of a non-target object", rules)
         self.assertIn("one potato", rules)
+
+    def test_operation_validation_supports_explicit_and_inferred_add(self) -> None:
+        self.assertEqual(
+            infer_operation_from_text("Add a yellow mug on the rotating turntable in front of the spotlight"),
+            "add",
+        )
+        plan = {
+            "schema_version": "e2w.edit_plan.v1",
+            "operation": "add",
+            "user_prompt": "Add a yellow mug on the rotating turntable in front of the spotlight",
+            "edit_subject": {
+                "label": "yellow mug",
+                "aliases": ["mug"],
+                "visual_descriptor": "a yellow mug on the rotating turntable",
+                "excluded_non_target_parts": ["turntable", "spotlight"],
+            },
+            "operation_details": {
+                "target_object": {"label": "yellow mug"},
+                "protected_objects": ["turntable", "spotlight"],
+                "physical_consequences": ["The mug stays on the rotating turntable."],
+                "local_fill_instruction": "Place the yellow mug naturally on the turntable.",
+                "visual_effects_to_add": ["contact shadow"],
+            },
+            "edited_scene": {
+                "caption": "A yellow mug is on the rotating turntable in front of the spotlight.",
+                "outcome_effects": ["The turntable continues rotating with the mug visible."],
+            },
+        }
+        metrics = validate_edit_plan(plan)
+        self.assertTrue(metrics["operation_accuracy"])
+        self.assertEqual(metrics["expected_operation"], "add")
+        prompt = serialize_first_frame_prompt(plan).lower()
+        self.assertIn("add the yellow mug", prompt)
+        self.assertNotIn("remove only", prompt)
+        self.assertNotIn("delete", prompt)
+        vace_prompt = serialize_vace_prompt(plan).lower()
+        self.assertIn("yellow mug", vace_prompt)
+        self.assertIn("one yellow mug", vace_prompt)
+        self.assertNotRegex(vace_prompt, r"\b(remove|delete|erase|removed)\b")
 
 
 class V02ReportContractTests(unittest.TestCase):

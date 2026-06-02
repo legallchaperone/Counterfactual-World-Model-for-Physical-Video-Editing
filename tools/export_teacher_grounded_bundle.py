@@ -16,6 +16,7 @@ from e2w_v0_common import (  # noqa: E402
     link_or_copy,
     load_jsonl,
     normalize_to_e2w_contract,
+    resolve_expected_operation,
     serialize_vace_prompt,
     summarize_boolean_metrics,
     validate_edit_plan,
@@ -59,6 +60,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", default=DEFAULT_MODE)
     parser.add_argument("--sample-id", action="append", default=[])
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--operation",
+        choices=["auto", "remove", "add"],
+        default="auto",
+        help="Expected edit operation. auto infers add/remove from the sample prompt.",
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -97,7 +104,14 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> tuple[dict[str
     sample_id = row["id"]
     raw = assistant_json(row)
     meta = video_meta(Path(row["video"]))
-    edit_plan, _ = normalize_to_e2w_contract(raw, row, meta, source="teacher_executable_v6")
+    expected_operation = resolve_expected_operation(args.operation, sample=row)
+    edit_plan, _ = normalize_to_e2w_contract(
+        raw,
+        row,
+        meta,
+        source="teacher_executable_v6",
+        operation=expected_operation,
+    )
     quadmask_spec = raw.get("quadmask_spec")
     if not isinstance(quadmask_spec, dict):
         raise ValueError(f"Missing quadmask_spec for sample {sample_id}")
@@ -106,7 +120,7 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> tuple[dict[str
     pred_dir = args.run_dir / "planner_pred" / sample_id
     pred_dir.mkdir(parents=True, exist_ok=True)
 
-    plan_metrics = validate_edit_plan(edit_plan)
+    plan_metrics = validate_edit_plan(edit_plan, expected_operation=expected_operation)
     spec_metrics = validate_quadmask_spec(quadmask_spec, meta)
     metrics = {
         "sample_id": sample_id,
