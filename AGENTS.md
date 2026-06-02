@@ -167,6 +167,51 @@ must ask for:
 The old empty `{"quadmask_spec": {"primary": {}, "affected": {}, "keep": {}}}`
 schema is archive-only.
 
+## Planner Data Conversion And Retrain
+
+Existing v6 eval/smoke files can be prompt-rewritten and validated with:
+
+```bash
+cd /home/cwx/E2W
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/rewrite_planner_user_prompt_schema.py \
+  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
+  --output-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
+  --archive-dir /data/cwx/E2W/data/physics_iq_vlm_sft/archive/v6_prompt_rewrite_20260602 \
+  --validate-assistant-executable
+```
+
+Generate train_v6 with visual grounding before retraining:
+
+```bash
+cd /home/cwx/E2W
+OPENROUTER_API_KEY=<key> \
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/relabel_quadmask_specs_with_grounding.py \
+  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_train.jsonl \
+  --output-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_train_v6_teacher_grounded.jsonl \
+  --debug-dir /data/cwx/E2W/data/physics_iq_vlm_sft/grounding_debug/train_v6_teacher_grounded \
+  --model qwen/qwen3.5-plus-20260420 \
+  --grid-size 8 \
+  --keep-going \
+  --skip-existing
+```
+
+Only rows accepted by executable validation enter the train output. Review
+queue rows are not training data.
+
+Retrain:
+
+```bash
+cd /home/cwx/E2W
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/train_qwen25vl_lora_sft.py \
+  --train-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_train_v6_teacher_grounded.jsonl \
+  --eval-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
+  --base-model /data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct \
+  --output-dir /data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v6_executable \
+  --max-steps 68 \
+  --save-steps 68 \
+  --eval-steps 68
+```
+
 ## v0.3 Quadmask VACE
 
 The canonical direct v0.3 quadmask VACE wrapper is:

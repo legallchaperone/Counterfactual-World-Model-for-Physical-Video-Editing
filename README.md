@@ -178,6 +178,59 @@ Useful per-sample artifacts live under:
 
 Expected files include Qwen prompt, edited first frame, VACE prompt, VACE conditioning video, VACE generation mask, edited video, metadata, and contact sheets.
 
+## Planner Data Conversion
+
+Old SFT JSONL files are non-executable and must not be used directly for new
+training. The conversion path is:
+
+1. Archive/rewrite existing executable eval prompts:
+
+```bash
+cd /home/cwx/E2W
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/rewrite_planner_user_prompt_schema.py \
+  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
+  --output-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
+  --archive-dir /data/cwx/E2W/data/physics_iq_vlm_sft/archive/v6_prompt_rewrite_20260602 \
+  --validate-assistant-executable
+```
+
+2. Generate the train split with visual grounding:
+
+```bash
+cd /home/cwx/E2W
+OPENROUTER_API_KEY=<key> \
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/relabel_quadmask_specs_with_grounding.py \
+  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_train.jsonl \
+  --output-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_train_v6_teacher_grounded.jsonl \
+  --debug-dir /data/cwx/E2W/data/physics_iq_vlm_sft/grounding_debug/train_v6_teacher_grounded \
+  --model qwen/qwen3.5-plus-20260420 \
+  --grid-size 8 \
+  --keep-going \
+  --skip-existing
+```
+
+The relabeler writes `summary.json` and `review_queue.json`. Only rows with
+`quadmask_spec_executable: true` are written to the train output by default.
+Do not train on review-queue rows.
+
+3. Retrain LoRA on converted train, evaluate on converted eval:
+
+```bash
+cd /home/cwx/E2W
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/train_qwen25vl_lora_sft.py \
+  --train-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_train_v6_teacher_grounded.jsonl \
+  --eval-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
+  --base-model /data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct \
+  --output-dir /data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v6_executable \
+  --max-steps 68 \
+  --save-steps 68 \
+  --eval-steps 68
+```
+
+After retraining, run `tools/eval_vlm_planner.py` on the 30-row eval and the 8
+smoke samples. The planner stage must pass strict top-level JSON parsing and
+`quadmask_spec_executable` before mask/Qwen/VACE stages run.
+
 ## Contract Notes
 
 - Do not weaken or delete the schema/prompt/parser checks in
