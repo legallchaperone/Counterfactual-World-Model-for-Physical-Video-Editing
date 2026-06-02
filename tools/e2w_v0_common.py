@@ -17,10 +17,58 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 DEFAULT_RUN_DIR = Path("/data/cwx/E2W/runs/e2w_v0_physics_iq")
-DEFAULT_SPLIT = Path("/data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval.jsonl")
+DEFAULT_SPLIT = Path("/data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl")
 DEFAULT_PLANNER = Path("/data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v5_split_eval")
 DEFAULT_BASE_MODEL = Path("/data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct")
 DEFAULT_TEACHER_DIR = Path("/data/cwx/E2W/data/physics_iq_vlm_sft/teacher_labels/parsed")
+PLANNER_IO_SCHEMA_VERSION = "e2w.planner_io.v6_executable.v1"
+EDIT_PLAN_SCHEMA_VERSION = "e2w.edit_plan.v1"
+QUADMASK_SPEC_SCHEMA_VERSION = "e2w.quadmask_spec.v1"
+PLANNER_REQUIRED_TOP_LEVEL_KEYS = (
+    "video_id",
+    "task_type",
+    "edit_prompt",
+    "target_objects",
+    "protected_objects",
+    "event_summary",
+    "physical_causal_chain",
+    "counterfactual_expectation",
+    "quadmask_spec",
+    "quality_flags",
+)
+EXECUTABLE_QUADMASK_SCHEMA: dict[str, Any] = {
+    "schema_version": QUADMASK_SPEC_SCHEMA_VERSION,
+    "operation": "remove|add",
+    "primary": {
+        "object_name": "...",
+        "description": "...",
+        "visibility": "clear|partial|brief|unclear",
+        "keyframes": [
+            {
+                "frame_index": 0,
+                "bbox_xyxy_norm1000": [0, 0, 0, 0],
+                "positive_points_norm1000": [[0, 0]],
+                "negative_points_norm1000": [],
+            }
+        ],
+        "confidence": 0.0,
+    },
+    "affected": {
+        "objects": ["..."],
+        "grid_shape": [8, 8],
+        "frame_ranges": [
+            {
+                "start_frame": 0,
+                "end_frame": 0,
+                "cells": ["A1"],
+            }
+        ],
+        "confidence": 0.0,
+        "reason": "...",
+    },
+    "keep": {"description": "..."},
+    "quality_flags": {"needs_human_review": False, "reasons": []},
+}
 
 RUN_DIRS = [
     "source",
@@ -123,6 +171,10 @@ class VacePromptContractError(ValueError):
     """Raised when planner text cannot produce a contract-safe VACE prompt."""
 
 
+class PlannerJsonContractError(ValueError):
+    """Raised when planner output is not a complete top-level planner JSON."""
+
+
 def ensure_run_dirs(run_dir: Path) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     for rel in RUN_DIRS:
@@ -216,21 +268,118 @@ def sample_indices(frame_count: int, n: int = 6) -> list[int]:
     return sorted({int(round(i * (frame_count - 1) / (n - 1))) for i in range(n)})
 
 
-def extract_json_text(text: str) -> tuple[str | None, str | None]:
+def planner_schema_template(operation: str = "remove") -> dict[str, Any]:
+    op = operation if operation in SUPPORTED_OPERATIONS else "remove|add"
+    return {
+        "schema_version": PLANNER_IO_SCHEMA_VERSION,
+        "video_id": "...",
+        "task_type": op,
+        "edit_prompt": f"{op} ..." if op in SUPPORTED_OPERATIONS else "remove ... or add ...",
+        "target_objects": [
+            {
+                "name": "...",
+                "aliases": [],
+                "role": "causal_initiator|affected_object|distractor|add_target|unknown",
+                "visibility": "clear|partial|brief|unclear",
+                "temporal_span": {"start_sec": 0.0, "end_sec": 0.0},
+                "location_description": "...",
+            }
+        ],
+        "protected_objects": [],
+        "event_summary": "...",
+        "physical_causal_chain": [
+            {
+                "step": 1,
+                "description": "...",
+                "objects": [],
+                "approx_time_sec": 0.0,
+            }
+        ],
+        "counterfactual_expectation": {
+            "if_removed": "Use for remove operations; keep target-free for VACE.",
+            "if_added": "Use for add operations; describe the resulting scene and effects.",
+            "affected_regions": [],
+            "unchanged_regions": [],
+            "uncertainties": [],
+        },
+        "quadmask_spec": EXECUTABLE_QUADMASK_SCHEMA,
+        "quality_flags": {
+            "usable_for_planner_sft": True,
+            "needs_human_review": False,
+            "reasons": [],
+        },
+    }
+
+
+def planner_schema_prompt_text(operation: str = "remove") -> str:
+    return json.dumps(planner_schema_template(operation), ensure_ascii=False)
+
+
+def build_planner_user_prompt(
+    video_id: str,
+    user_request: str,
+    operation: str = "remove",
+    extra_rules: str | None = None,
+) -> str:
+    op = operation if operation in SUPPORTED_OPERATIONS else "remove|add"
+    rules = [
+        "Return only one complete top-level JSON object. Do not include markdown, prose, or nested-only JSON fragments.",
+        "The JSON must include executable quadmask grounding: primary.keyframes[].bbox_xyxy_norm1000, primary.keyframes[].positive_points_norm1000, affected.grid_shape, and affected.frame_ranges[].cells.",
+        "Use norm1000 coordinates for bbox and points. The grid cells use A1-style labels with A1 at the top-left.",
+        "Do not output the old empty quadmask_spec schema {\"primary\": {}, \"affected\": {}, \"keep\": {}}.",
+        "Set quadmask_spec.operation equal to task_type.",
+        "For add operations, describe placement and added visual effects such as contact shadow when visible or physically expected.",
+        "For remove operations, keep counterfactual/VACE-facing text target-free: do not name the removed target or visible target subparts/materials in counterfactual_expectation.if_removed.",
+        "When a visible non-target object count is clear and relevant, include it explicitly, for example one potato or two dominoes. Do not invent counts when uncertain.",
+    ]
+    if extra_rules:
+        rules.append(extra_rules.strip())
+    return (
+        "You are the Edit2World SFT VLM planner. Given the video and user request, "
+        "return only valid JSON for the executable planner schema.\n\n"
+        f"Schema version: {PLANNER_IO_SCHEMA_VERSION}\n"
+        f"Task operation: {op}\n"
+        "Rules:\n- "
+        + "\n- ".join(rules)
+        + "\n\nThe JSON must match this planner schema:\n"
+        + planner_schema_prompt_text(op)
+        + "\n\n"
+        f"Set video_id exactly to {video_id}.\n"
+        f"User request: {user_request.strip()}"
+    )
+
+
+def _strip_json_fence(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned).strip()
-    decoder = json.JSONDecoder()
-    for i, ch in enumerate(cleaned):
-        if ch != "{":
-            continue
-        try:
-            _, end = decoder.raw_decode(cleaned[i:])
-            return cleaned[i : i + end], None
-        except json.JSONDecodeError as exc:
-            last_error = str(exc)
-    return None, last_error if "last_error" in locals() else "no JSON object found"
+    return cleaned
+
+
+def _validate_top_level_planner_json(obj: Any) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(obj, dict):
+        return None, "planner output must be a top-level JSON object"
+    missing = [key for key in PLANNER_REQUIRED_TOP_LEVEL_KEYS if key not in obj]
+    if missing:
+        return None, f"planner JSON missing top-level keys: {', '.join(missing)}"
+    if not isinstance(obj.get("target_objects"), list) or not obj["target_objects"]:
+        return None, "planner JSON target_objects must be a non-empty list"
+    if not isinstance(obj.get("quadmask_spec"), dict):
+        return None, "planner JSON quadmask_spec must be an object"
+    return obj, None
+
+
+def extract_json_text(text: str) -> tuple[str | None, str | None]:
+    cleaned = _strip_json_fence(text)
+    try:
+        obj = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        return None, str(exc)
+    obj, error = _validate_top_level_planner_json(obj)
+    if obj is None:
+        return None, error
+    return json.dumps(obj, ensure_ascii=False), None
 
 
 def parse_json_output(text: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -412,6 +561,27 @@ def _first_target(raw: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]
     return {"name": infer_target_from_sample(sample), "aliases": []}
 
 
+def _box_from_rectangle_dict(value: Any) -> list[int] | None:
+    if not isinstance(value, dict):
+        return None
+    coords = value.get("coordinates") if isinstance(value.get("coordinates"), dict) else value
+    top_left = coords.get("top_left") or coords.get("topLeft") or coords.get("min")
+    bottom_right = coords.get("bottom_right") or coords.get("bottomRight") or coords.get("max")
+    if not (isinstance(top_left, list) and isinstance(bottom_right, list)):
+        return None
+    if len(top_left) != 2 or len(bottom_right) != 2:
+        return None
+    try:
+        return [
+            int(round(float(top_left[0]))),
+            int(round(float(top_left[1]))),
+            int(round(float(bottom_right[0]))),
+            int(round(float(bottom_right[1]))),
+        ]
+    except (TypeError, ValueError):
+        return None
+
+
 def _bbox_from_raw(raw: dict[str, Any], width: int, height: int) -> list[int] | None:
     candidates: list[Any] = []
     q = raw.get("quadmask_spec", {}) if isinstance(raw.get("quadmask_spec"), dict) else {}
@@ -422,6 +592,9 @@ def _bbox_from_raw(raw: dict[str, Any], width: int, height: int) -> list[int] | 
         if isinstance(target, dict):
             candidates.append(target.get(key))
     for cand in candidates:
+        rect_box = _box_from_rectangle_dict(cand)
+        if rect_box is not None and box_is_valid(rect_box, width, height):
+            return rect_box
         if not isinstance(cand, list) or len(cand) != 4:
             continue
         try:
@@ -430,6 +603,9 @@ def _bbox_from_raw(raw: dict[str, Any], width: int, height: int) -> list[int] | 
             continue
         if box_is_valid(box, width, height):
             return box
+    rect_box = _box_from_rectangle_dict(primary)
+    if rect_box is not None and box_is_valid(rect_box, width, height):
+        return rect_box
     return None
 
 
@@ -471,14 +647,20 @@ def normalize_to_e2w_contract(
     cfe = raw.get("counterfactual_expectation", {})
     counterfactual_outcomes: list[str] = []
     if isinstance(cfe, dict):
-        counterfactual_outcomes.extend(_strings(cfe.get("if_removed")))
+        if op == "add" and str(cfe.get("if_added") or "").strip():
+            counterfactual_outcomes.extend(_strings(cfe.get("if_added")))
+        else:
+            counterfactual_outcomes.extend(_strings(cfe.get("if_removed")))
     counterfactual_outcomes = _dedupe_strings([x for x in counterfactual_outcomes if x])
     observed_dynamics = _dedupe_strings([x for x in observed_dynamics if x])
 
     scene_caption = ""
     outcome_effects: list[str] = []
     if isinstance(cfe, dict):
-        scene_caption = str(cfe.get("if_removed") or "").strip()
+        if op == "add" and str(cfe.get("if_added") or "").strip():
+            scene_caption = str(cfe.get("if_added") or "").strip()
+        else:
+            scene_caption = str(cfe.get("if_removed") or "").strip()
         outcome_effects.extend(counterfactual_outcomes)
     preserve_regions = _strings(cfe.get("unchanged_regions") if isinstance(cfe, dict) else [])
     if op == "add":
@@ -491,7 +673,7 @@ def normalize_to_e2w_contract(
         user_prompt = f"remove {label}"
 
     edit_plan = {
-        "schema_version": "e2w.edit_plan.v1",
+        "schema_version": EDIT_PLAN_SCHEMA_VERSION,
         "operation": op,
         "user_prompt": user_prompt,
         "scene_summary": str(raw.get("event_summary") or "").strip(),
@@ -541,7 +723,7 @@ def normalize_to_e2w_contract(
     spec = dict(raw_q)
     spec.update(
         {
-        "schema_version": "e2w.quadmask_spec.v1",
+        "schema_version": QUADMASK_SPEC_SCHEMA_VERSION,
         "operation": op,
         "source": source,
         "grid": {
@@ -835,12 +1017,20 @@ def validate_quadmask_spec(spec: dict[str, Any], meta: dict[str, Any]) -> dict[s
                 ):
                     grid_boxes_valid += 1
 
-    coordinate_range_valid = bbox_ok or point_ok
-    affected_grid_valid = grid_boxes_seen == 0 or grid_boxes_seen == grid_boxes_valid
-    executable = prompt_ok and coordinate_range_valid and affected_grid_valid and frame_indices_valid
     executor_checks = validate_quadmask_spec_executor(spec, meta)
-    schema_ok = all(k in spec for k in ["schema_version", "operation", "grid", "primary", "affected_regions"])
-    schema_ok = schema_ok or all(k in spec for k in ["schema_version", "primary", "affected"])
+    coordinate_range_valid = bbox_ok and point_ok
+    affected_grid_valid = bool(executor_checks["affected_grid_valid"])
+    frame_indices_valid = frame_indices_valid and bool(executor_checks["frame_ranges_valid"])
+    executable = prompt_ok and bool(executor_checks["executor_valid"])
+    affected_obj = spec.get("affected", {}) if isinstance(spec.get("affected"), dict) else {}
+    schema_ok = (
+        spec.get("schema_version") == QUADMASK_SPEC_SCHEMA_VERSION
+        and str(spec.get("operation") or "").strip().lower() in SUPPORTED_OPERATIONS
+        and isinstance(primary.get("keyframes"), list)
+        and bool(primary.get("keyframes"))
+        and isinstance(affected_obj.get("grid_shape"), list)
+        and isinstance(affected_obj.get("frame_ranges"), list)
+    )
     return {
         "quadmask_schema_valid": schema_ok,
         "primary_prompt_valid": prompt_ok,

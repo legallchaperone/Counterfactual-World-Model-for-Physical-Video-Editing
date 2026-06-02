@@ -20,7 +20,7 @@ from e2w_v0_common import ensure_run_dirs, load_manifest, write_json  # noqa: E4
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_DIR = Path(__file__).resolve().parent
 RUNS_ROOT = REPO_ROOT / "runs"
-DEFAULT_INPUT = REPO_ROOT / "data/physics_iq_vlm_sft/vlm_planner_sft_eval.jsonl"
+DEFAULT_INPUT = REPO_ROOT / "data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl"
 DEFAULT_MODE = "mode_v0_2_qwen_vace_smoke"
 DEFAULT_SAMPLES = ["0052", "0056", "0070", "0076", "0112", "0077", "0341", "0128"]
 DEFAULT_PLANNER_ADAPTER = Path("/data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v5_split_eval")

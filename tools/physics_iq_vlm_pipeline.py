@@ -22,6 +22,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from e2w_v0_common import build_planner_user_prompt, planner_schema_prompt_text
+
 
 DEFAULT_SOURCE_DIR = Path(
     "/data/cwx/physics-iq/physics-IQ-benchmark/split-videos/testing/16FPS"
@@ -74,55 +76,7 @@ Human annotation:
 - notes: {human_notes}
 
 Return JSON with this exact top-level structure:
-{{
-  "video_id": "...",
-  "task_type": "remove",
-  "edit_prompt": "remove ...",
-  "target_objects": [
-    {{
-      "name": "...",
-      "aliases": ["..."],
-      "role": "causal_initiator|affected_object|distractor|unknown",
-      "visibility": "clear|partial|brief|unclear",
-      "temporal_span": {{"start_sec": 0.0, "end_sec": 8.0}},
-      "location_description": "..."
-    }}
-  ],
-  "protected_objects": ["..."],
-  "event_summary": "...",
-  "physical_causal_chain": [
-    {{
-      "step": 1,
-      "description": "...",
-      "objects": ["..."],
-      "approx_time_sec": 0.0
-    }}
-  ],
-  "counterfactual_expectation": {{
-    "if_removed": "...",
-    "affected_regions": ["..."],
-    "unchanged_regions": ["..."],
-    "uncertainties": ["..."]
-  }},
-  "quadmask_spec": {{
-    "primary": {{
-      "objects": ["..."],
-      "description": "pixels of removed object(s) across all frames"
-    }},
-    "affected": {{
-      "objects": ["..."],
-      "description": "regions whose motion/state may change if target is removed"
-    }},
-    "keep": {{
-      "description": "background and unrelated objects that should stay unchanged"
-    }}
-  }},
-  "quality_flags": {{
-    "usable_for_planner_sft": true,
-    "needs_human_review": false,
-    "reasons": []
-  }}
-}}"""
+{planner_schema}"""
 
 
 def read_descriptions(path: Path) -> dict[str, dict[str, str]]:
@@ -297,6 +251,7 @@ def call_openrouter(args: argparse.Namespace, row: dict[str, str]) -> dict[str, 
         protected_objects=row.get("protected_objects", ""),
         human_notes=row.get("human_notes", ""),
         planner_contract_rules=PLANNER_VACE_CONTRACT_RULES,
+        planner_schema=planner_schema_prompt_text("remove"),
     )
     payload = {
         "model": args.model,
@@ -432,22 +387,11 @@ def build_sft(args: argparse.Namespace) -> None:
                 if candidate.exists():
                     video_path = str(candidate)
             label = json.loads(parsed_path.read_text(encoding="utf-8"))
-            prompt = (
-                "You are the Edit2World VLM planner. Given the video and user request, "
-                "return only valid JSON, without markdown. The JSON must match this planner schema: "
-                '{"video_id": "...", "task_type": "remove", "edit_prompt": "remove ...", '
-                '"target_objects": [{"name": "...", "aliases": [], "role": "...", '
-                '"visibility": "...", "temporal_span": {"start_sec": 0.0, "end_sec": 0.0}, '
-                '"location_description": "..."}], "protected_objects": [], '
-                '"event_summary": "...", "physical_causal_chain": [{"step": 1, '
-                '"description": "...", "objects": [], "approx_time_sec": 0.0}], '
-                '"counterfactual_expectation": {"if_removed": "...", "affected_regions": [], '
-                '"unchanged_regions": [], "uncertainties": []}, "quadmask_spec": {"primary": {}, '
-                '"affected": {}, "keep": {}}, "quality_flags": {"usable_for_planner_sft": true, '
-                '"needs_human_review": false, "reasons": []}}. '
-                f"{PLANNER_VACE_CONTRACT_RULES} "
-                f"Set video_id exactly to {row['video_id']}. "
-                f"User request: remove {row['remove_objects']}."
+            prompt = build_planner_user_prompt(
+                row["video_id"],
+                f"remove {row['remove_objects']}",
+                operation="remove",
+                extra_rules=PLANNER_VACE_CONTRACT_RULES,
             )
             example = {
                 "id": row["video_id"],

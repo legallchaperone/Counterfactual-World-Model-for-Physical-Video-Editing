@@ -4,6 +4,8 @@ Last updated: 2026-06-02 UTC
 
 This document defines the runtime contract for the local E2W smoke pipeline. It separates historical interface versions from the current v0.3 target so that reports do not overstate what the model actually consumed.
 
+The canonical planner I/O schema is `e2w.planner_io.v6_executable.v1`.
+
 ## Version Summary
 
 | version | status | VACE input contract | quadmask status | main purpose |
@@ -11,6 +13,32 @@ This document defines the runtime contract for the local E2W smoke pipeline. It 
 | `v0` | legacy integration | Wan-VACE consumes `src_video` plus binary `src_mask` | saved or logged only | prove the external VACE executor can run |
 | `v0.2` | frozen smoke pipeline | Wan-VACE consumes Qwen first-frame conditioning plus known/generate mask | built, packaged, and audited, but not consumed by VACE | SFT VLM planner inference, fresh artifacts, strict prompt/report contracts |
 | `v0.3` | current quadmask-control contract | E2W quad VACE runner consumes `src_video`, binary generation mask, `quadmask.npy`, and `operation` | model control path consumes four-value quadmask | prove the VACE interface can accept semantic E2W quadmask control |
+
+## Planner I/O Schema
+
+New planner train/eval/smoke inputs must use
+`e2w.planner_io.v6_executable.v1`. This schema supports both `remove` and
+`add`, but operation support is not enough by itself. The planner must also
+produce executable grounding:
+
+- top-level `video_id`, `task_type`, `edit_prompt`, `target_objects`,
+  `protected_objects`, `event_summary`, `physical_causal_chain`,
+  `counterfactual_expectation`, `quadmask_spec`, and `quality_flags`
+- `quadmask_spec.schema_version: e2w.quadmask_spec.v1`
+- `quadmask_spec.operation: remove|add`
+- `quadmask_spec.primary.keyframes[].bbox_xyxy_norm1000`
+- `quadmask_spec.primary.keyframes[].positive_points_norm1000`
+- `quadmask_spec.affected.grid_shape`
+- `quadmask_spec.affected.frame_ranges[].cells`
+
+The old text-only `quadmask_spec.primary/affected/keep` prompt is invalid for
+new data. It may only remain in archived source files. Parser behavior is
+strict: partial text or nested JSON objects are failures, even if an internal
+object is valid JSON.
+
+The executable schema checks are enforced by `tests/test_v02_contracts.py`.
+Do not weaken those checks to pass a run; fix the planner data, prompt, or
+checkpoint.
 
 ## v0.2 Runtime Contract
 

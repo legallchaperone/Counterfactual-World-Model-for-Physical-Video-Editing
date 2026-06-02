@@ -18,6 +18,9 @@ State:
 - v0.3 is the current VACE contract update: VACE can consume `quadmask.npy`
   through the E2W quad runner, with `--quadmask_npy`, `--operation`, and a
   binary generation mask.
+- The canonical planner I/O schema is `e2w.planner_io.v6_executable.v1`.
+  It supports both add and remove, and it requires executable grounding
+  fields, not the old empty `quadmask_spec.primary/affected/keep` prompt.
 - A previous full 8-sample run completed before the strict VACE prompt
   hard-fail contract was added. Treat it as a reference artifact, not as proof
   that the current stricter pipeline passes.
@@ -84,14 +87,19 @@ Current Results:
 Current Blocker:
 
 - The SFT planner currently outputs old/non-executable grounding such as
-  `bbox_2d` or rectangle coordinates, while the strict quadmask builder expects
-  normalized executable keyframes/points/grid fields. Fix planner output schema
-  compatibility before the next full forward pass.
+  `bbox_2d` or rectangle coordinates because the old SFT train data and old
+  eval prompts did not teach executable grounding. The strict quadmask builder
+  expects normalized executable keyframes/points/grid fields. Convert the SFT
+  train/eval data to `e2w.planner_io.v6_executable.v1` and retrain before the
+  next trusted full forward pass.
 
 Next Actions:
 
-- Fix VLM planner output normalization/schema compatibility so the 8 smoke
-  planner predictions produce executable quadmask specs.
+- Archive old SFT JSONL files, convert train/eval prompts and labels to
+  `e2w.planner_io.v6_executable.v1`, and retrain the SFT LoRA on the converted
+  train split. Do not mix eval/smoke rows into train.
+- Re-evaluate the retrained planner on 30 eval and 8 smoke samples. The planner
+  stage must produce complete top-level JSON and executable quadmask specs.
 - Re-run the 8 remove smoke samples. Only after planner passes should mask,
   Qwen first-frame, VACE, package/report, and any add-on experiment run.
 
@@ -99,6 +107,9 @@ Next Actions:
 
 - Work from `/home/cwx/E2W` for code, tests, docs, and Git.
 - After completing any feature edit or meaningful step of changes, create a focused git commit to mark that change. Do not bundle unrelated or user-owned work into the commit.
+- Do not weaken, delete, or bypass schema/prompt/parser tests to make a run
+  pass. If `tests/test_v02_contracts.py` fails, fix the data, prompt, parser,
+  planner, or runner contract instead.
 - Write full-run artifacts under `/data/cwx/E2W/runs`.
 - Use `/data/cwx/conda/envs/edit2world-phase1-real/bin/python`.
 - Do not assume bare `python` has the right dependencies.
@@ -120,7 +131,7 @@ cd /home/cwx/E2W
 RUN_NAME=e2w_v0_2_forward_$(date -u +%Y%m%dT%H%M%SZ)
 /data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/run_v02_qwen_vace_smoke.py \
   --run-dir "/data/cwx/E2W/runs/$RUN_NAME" \
-  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval.jsonl \
+  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
   --planner-adapter /data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v5_split_eval \
   --base-model /data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct \
   --operation remove \
@@ -143,6 +154,18 @@ The planner stage must create `planner_pred/<sample-id>/raw_output.txt` and
 `planner_pred/<sample-id>/raw.pred.json`. If either is missing for any selected
 sample, the run did not use the SFT VLM planner and must not be treated as a
 valid forward pass.
+
+The input JSONL user prompts must use `e2w.planner_io.v6_executable.v1` and
+must ask for:
+
+- `quadmask_spec.operation`
+- `primary.keyframes[].bbox_xyxy_norm1000`
+- `primary.keyframes[].positive_points_norm1000`
+- `affected.grid_shape`
+- `affected.frame_ranges[].cells`
+
+The old empty `{"quadmask_spec": {"primary": {}, "affected": {}, "keep": {}}}`
+schema is archive-only.
 
 ## v0.3 Quadmask VACE
 

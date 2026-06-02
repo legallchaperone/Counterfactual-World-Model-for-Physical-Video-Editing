@@ -18,20 +18,26 @@ TOOLS = ROOT / "tools"
 sys.path.insert(0, str(TOOLS))
 
 from e2w_v0_common import (  # noqa: E402
+    PLANNER_IO_SCHEMA_VERSION,
     VacePromptContractError,
+    build_planner_user_prompt,
     infer_actual_operation_from_raw,
     infer_operation_from_sample,
     infer_operation_from_text,
     normalize_to_e2w_contract,
+    parse_json_output,
     resolve_expected_operation,
     serialize_first_frame_prompt,
     serialize_vace_prompt,
     validate_edit_plan,
+    validate_quadmask_spec,
 )
 import build_quadmask_from_spec as build_quadmask  # noqa: E402
 import export_teacher_grounded_bundle as export_teacher  # noqa: E402
 import package_v02_qwen_vace_smoke as package_v02  # noqa: E402
 import physics_iq_vlm_pipeline  # noqa: E402
+import relabel_quadmask_specs_with_grounding as relabel_grounding  # noqa: E402
+import rewrite_planner_user_prompt_schema as rewrite_prompt_schema  # noqa: E402
 import run_v02_qwen_vace_smoke as run_v02  # noqa: E402
 import run_vace_v0  # noqa: E402
 
@@ -160,6 +166,16 @@ class V02PromptContractTests(unittest.TestCase):
         self.assertIn("visible target subpart", rules)
         self.assertIn("visible count of a non-target object", rules)
         self.assertIn("one potato", rules)
+
+    def test_planner_user_prompt_schema_is_v6_executable(self) -> None:
+        prompt = build_planner_user_prompt("0077", "remove the spotlight", operation="remove")
+        self.assertIn(PLANNER_IO_SCHEMA_VERSION, prompt)
+        self.assertIn("bbox_xyxy_norm1000", prompt)
+        self.assertIn("positive_points_norm1000", prompt)
+        self.assertIn("grid_shape", prompt)
+        self.assertIn("frame_ranges", prompt)
+        self.assertIn("quadmask_spec.operation", prompt)
+        self.assertNotIn('"quadmask_spec": {"primary": {}, "affected": {}, "keep": {}}', prompt)
 
     def test_operation_validation_supports_explicit_and_inferred_add(self) -> None:
         self.assertEqual(
@@ -383,6 +399,74 @@ class V02PromptContractTests(unittest.TestCase):
             self.assertEqual(mask_entry["status"], "failed")
             self.assertEqual(mask_entry["failure_source"], "planner")
 
+    def test_planner_json_parser_rejects_nested_object_salvage(self) -> None:
+        raw, error = parse_json_output(
+            'The answer is {"name": "yellow mug", "aliases": [], "role": "target"}'
+        )
+        self.assertIsNone(raw)
+        self.assertIn("Expecting value", error)
+
+        raw, error = parse_json_output(
+            '{"name": "yellow mug", "aliases": [], "role": "target"}'
+        )
+        self.assertIsNone(raw)
+        self.assertIn("missing top-level keys", error)
+
+    def test_old_text_quadmask_schema_is_not_executable(self) -> None:
+        metrics = validate_quadmask_spec(
+            {
+                "schema_version": "e2w.quadmask_spec.v1",
+                "operation": "remove",
+                "primary": {"objects": ["mug"], "description": "pixels of target"},
+                "affected": {"objects": ["table"], "description": "table area"},
+                "keep": {"description": "background"},
+            },
+            {"width": 832, "height": 480, "frame_count": 81},
+        )
+        self.assertFalse(metrics["quadmask_schema_valid"])
+        self.assertFalse(metrics["quadmask_spec_executable"])
+        self.assertEqual(metrics["executor_failure"], "missing_primary_bbox")
+
+    def test_relabel_and_rewrite_helpers_use_v6_prompt_schema(self) -> None:
+        row = {
+            "id": "unit",
+            "video": "/tmp/unit.mp4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": 'Old prompt "quadmask_spec": {"primary": {}, "affected": {}, "keep": {}}. User request: remove the mug.',
+                },
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "video_id": "unit",
+                            "task_type": "remove",
+                            "edit_prompt": "remove the mug",
+                            "target_objects": [{"name": "mug"}],
+                            "protected_objects": ["turntable"],
+                            "event_summary": "A mug sits on a turntable.",
+                            "physical_causal_chain": [],
+                            "counterfactual_expectation": {"if_removed": "The turntable remains visible."},
+                            "quadmask_spec": {"primary": {}, "affected": {}, "keep": {}},
+                            "quality_flags": {},
+                        }
+                    ),
+                },
+            ],
+        }
+        label = assistant_json(row)
+        rewritten = relabel_grounding.rewrite_row_user_prompt_schema(row, label, "remove")
+        prompt = rewritten["messages"][0]["content"]
+        self.assertIn(PLANNER_IO_SCHEMA_VERSION, prompt)
+        self.assertIn("bbox_xyxy_norm1000", prompt)
+        self.assertNotIn('"quadmask_spec": {"primary": {}, "affected": {}, "keep": {}}', prompt)
+
+        rewritten2, metrics = rewrite_prompt_schema.rewrite_row(row, "auto")
+        self.assertEqual(rewritten2["metadata"]["planner_user_prompt_schema"], PLANNER_IO_SCHEMA_VERSION)
+        self.assertTrue(metrics["old_prompt_had_empty_quadmask_schema"])
+        self.assertFalse(metrics["new_prompt_had_empty_quadmask_schema"])
+
 
 class V02ReportContractTests(unittest.TestCase):
     def test_first_frame_qc_separates_interface_from_visual_review(self) -> None:
@@ -455,7 +539,7 @@ class V02RunnerContractTests(unittest.TestCase):
         self.assertEqual(run_v02.stage_env_metadata(env), {"CUDA_VISIBLE_DEVICES": "4"})
 
     def test_canonical_runner_requires_vlm_planner_prediction_artifacts(self) -> None:
-        self.assertEqual(run_v02.DEFAULT_INPUT.name, "vlm_planner_sft_eval.jsonl")
+        self.assertEqual(run_v02.DEFAULT_INPUT.name, "vlm_planner_sft_eval_v6_teacher_grounded.jsonl")
         self.assertIn("raw_output", run_v02.CRITICAL_KEYS["planner"])
         self.assertIn("raw_pred", run_v02.CRITICAL_KEYS["planner"])
         self.assertNotIn("raw_teacher", run_v02.CRITICAL_KEYS["planner"])

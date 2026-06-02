@@ -6,6 +6,8 @@ Canonical code root: `/home/cwx/E2W`.
 
 Canonical data/artifact root: `/data/cwx/E2W`.
 
+Canonical planner schema: `e2w.planner_io.v6_executable.v1`.
+
 Runtime contract:
 
 `docs/CONTRACT.md`
@@ -38,6 +40,31 @@ Important: the reference v0.2 VACE stage did not consume `quadmask.npy`; it only
 | `v0.2` | frozen smoke | Every stage regenerates artifacts; canonical planner stage is SFT VLM planner inference; prompts/reports are strict; legacy VACE still does not consume quadmask. |
 | `v0.3` | current contract | VACE consumes `--quadmask_npy`, `--operation`, and binary generation mask through `tools/run_wan_vace_quad_i2v.py`. |
 
+## Planner Schema
+
+The only valid planner I/O schema for new SFT train/eval data is
+`e2w.planner_io.v6_executable.v1`.
+
+It supports both `remove` and `add` through `task_type`, `edit_prompt`, and
+`quadmask_spec.operation`. This add/remove support is the operation axis. It is
+separate from the grounding axis, which requires executable geometry:
+
+- `quadmask_spec.primary.keyframes[].bbox_xyxy_norm1000`
+- `quadmask_spec.primary.keyframes[].positive_points_norm1000`
+- `quadmask_spec.affected.grid_shape`
+- `quadmask_spec.affected.frame_ranges[].cells`
+
+The old prompt schema:
+
+```json
+{"quadmask_spec": {"primary": {}, "affected": {}, "keep": {}}}
+```
+
+is archived-only. It must not be used for new training, eval, smoke, or
+canonical forward-pass input. Planner output parsing is strict: a complete
+top-level JSON object with planner keys is required; nested target-object JSON
+fragments are parse failures.
+
 ## Full Forward Pass
 
 This is the canonical full smoke forward pass. It has one valid planner path: run the SFT VLM planner checkpoint and save `raw_output.txt` plus `raw.pred.json` for every selected sample.
@@ -55,7 +82,7 @@ cd /home/cwx/E2W
 RUN_NAME=e2w_v0_2_forward_$(date -u +%Y%m%dT%H%M%SZ)
 /data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/run_v02_qwen_vace_smoke.py \
   --run-dir "/data/cwx/E2W/runs/$RUN_NAME" \
-  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval.jsonl \
+  --input-jsonl /data/cwx/E2W/data/physics_iq_vlm_sft/vlm_planner_sft_eval_v6_teacher_grounded.jsonl \
   --planner-adapter /data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v5_split_eval \
   --base-model /data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct \
   --operation remove \
@@ -153,6 +180,12 @@ Expected files include Qwen prompt, edited first frame, VACE prompt, VACE condit
 
 ## Contract Notes
 
+- Do not weaken or delete the schema/prompt/parser checks in
+  `tests/test_v02_contracts.py` to make a run pass. Fix the data, prompt, or
+  planner instead.
+- Planner train/eval user prompts must use `e2w.planner_io.v6_executable.v1`;
+  use `tools/rewrite_planner_user_prompt_schema.py` to archive and rewrite
+  existing JSONL prompts.
 - Qwen first-frame prompts name the actual target label, aliases, and visual descriptor. They must not use `primary subject`.
 - Qwen prompts protect non-target objects and only ask to fill target pixels with plausible local background.
 - Qwen-Image-Edit currently consumes image + text prompt only. `first_frame_edit_metadata.json` records `target_mask_consumed_by_backend: false`.

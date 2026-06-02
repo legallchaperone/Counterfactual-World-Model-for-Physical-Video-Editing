@@ -21,6 +21,8 @@ from PIL import Image, ImageDraw
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e2w_v0_common import (  # noqa: E402
     DEFAULT_RUN_DIR,
+    build_planner_user_prompt,
+    infer_actual_operation_from_raw,
     load_jsonl,
     read_video_rgb,
     sample_indices,
@@ -38,7 +40,7 @@ DEFAULT_DEBUG_DIR = Path("/data/cwx/E2W/data/physics_iq_vlm_sft/grounding_debug"
 
 SYSTEM_PROMPT = """You are a visual grounding labeler for Edit2World.
 Return only valid JSON. Do not include markdown or explanations.
-Use the human/user remove target and existing planner text as source of truth.
+Use the human/user edit target and existing planner text as source of truth.
 Your job is spatial grounding, not rewriting the physics plan."""
 
 
@@ -65,6 +67,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--provider-only", action="append")
     parser.add_argument("--allow-fallbacks", action="store_true")
     parser.add_argument("--require-parameters", action="store_true")
+    parser.add_argument(
+        "--no-rewrite-user-prompt-schema",
+        action="store_true",
+        help="Keep the original SFT user prompt. By default relabeled rows use the v6 executable planner schema prompt.",
+    )
+    parser.add_argument(
+        "--allow-non-executable-output",
+        action="store_true",
+        help="Write rows even when executable quadmask validation fails. Default is to send failures to review queue.",
+    )
     return parser.parse_args()
 
 
@@ -78,6 +90,21 @@ def user_request(row: dict[str, Any]) -> str:
     if match:
         return match.group(1).strip()
     return content.strip()
+
+
+def row_user_request(row: dict[str, Any], label: dict[str, Any], operation: str) -> str:
+    edit_prompt = str(label.get("edit_prompt") or "").strip()
+    if edit_prompt:
+        return edit_prompt
+    request = user_request(row)
+    if request:
+        return request
+    target = label.get("target_objects", [{}])
+    if isinstance(target, list) and target and isinstance(target[0], dict):
+        name = str(target[0].get("name") or "target object").strip()
+    else:
+        name = "target object"
+    return f"{operation} {name}"
 
 
 def draw_grid(frame: Image.Image, frame_index: int, grid_size: int) -> Image.Image:
@@ -139,7 +166,13 @@ def image_data_url(path: Path) -> str:
     return f"data:image/png;base64,{data}"
 
 
-def build_teacher_prompt(row: dict[str, Any], label: dict[str, Any], sheet_meta: dict[str, Any], grid_size: int) -> str:
+def build_teacher_prompt(
+    row: dict[str, Any],
+    label: dict[str, Any],
+    sheet_meta: dict[str, Any],
+    grid_size: int,
+    operation: str,
+) -> str:
     text_quadmask = label.get("quadmask_spec", {})
     return f"""Relabel this Edit2World planner example with executable spatial grounding.
 
@@ -150,6 +183,7 @@ Video/sample:
 - video_height: {sheet_meta["height"]}
 - frame_count: {sheet_meta["frame_count"]}
 - sampled_frames_in_contact_sheet: {sheet_meta["frame_indices"]}
+- operation: {operation}
 
 Existing text planner label:
 {json.dumps(label, ensure_ascii=False, indent=2)}
@@ -161,20 +195,21 @@ Coordinate rules:
 - Use norm1000 coordinates, not pixels.
 - x_norm1000 = round(x_pixel / video_width * 1000).
 - y_norm1000 = round(y_pixel / video_height * 1000).
-- bbox_xyxy_norm1000 is [x1, y1, x2, y2], tight around the primary remove target in frame 0.
+- bbox_xyxy_norm1000 is [x1, y1, x2, y2], tight around the primary edit target or insertion area in frame 0.
 - positive_points_norm1000 should be inside the primary target, preferably near its visual center.
 - negative_points_norm1000 should be nearby non-target points if useful; use [] if unsure.
 - The contact sheet grid is {grid_size}x{grid_size}. A1 is top-left, H8 is bottom-right for an 8x8 grid.
 
 Affected region rules:
 - Mark coarse grid cells where counterfactual visual/physical effects should occur.
-- Include contact regions, object trajectory changes, collision regions, dynamic shadows/reflections/effects, and background revealed by removing the primary object.
+- Include contact regions, object trajectory changes, collision regions, dynamic shadows/reflections/effects, removed-object fill regions, and added-object shadows/reflections when relevant.
 - Use frame ranges in original video frame indices.
 - If there is truly no visible affected region beyond the primary removal, set frame_ranges to [] and confidence <= 0.35.
 
 Return exactly this JSON object:
 {{
   "schema_version": "e2w.quadmask_spec.v1",
+  "operation": "{operation}",
   "primary": {{
     "object_name": "...",
     "description": "...",
@@ -294,6 +329,22 @@ def merge_label(base_label: dict[str, Any], grounded_spec: dict[str, Any]) -> di
     return out
 
 
+def rewrite_row_user_prompt_schema(row: dict[str, Any], label: dict[str, Any], operation: str) -> dict[str, Any]:
+    messages = list(row.get("messages", []))
+    if not messages:
+        messages = [{"role": "user", "content": ""}]
+    messages[0] = {
+        **messages[0],
+        "role": "user",
+        "content": build_planner_user_prompt(
+            str(row.get("id") or label.get("video_id") or ""),
+            row_user_request(row, label, operation),
+            operation=operation,
+        ),
+    }
+    return {**row, "messages": messages}
+
+
 def process_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str, Any] | None:
     sample_id = row["id"]
     out_dir = args.debug_dir / sample_id
@@ -302,10 +353,11 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str, Any]
         return json.loads(validated_path.read_text(encoding="utf-8"))["sft_row"]
 
     label = parse_assistant_label(row)
+    operation, operation_source = infer_actual_operation_from_raw(label, row)
     video_path = Path(row["video"])
     contact_sheet = out_dir / "contact_sheet.png"
     sheet_meta = make_contact_sheet(video_path, contact_sheet, args.grid_size)
-    prompt = build_teacher_prompt(row, label, sheet_meta, args.grid_size)
+    prompt = build_teacher_prompt(row, label, sheet_meta, args.grid_size, operation)
     write_text(out_dir / "prompt.txt", prompt)
 
     if args.dry_run:
@@ -326,13 +378,16 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str, Any]
     write_json(out_dir / "teacher_raw.json", raw)
     content = raw["choices"][0]["message"]["content"]
     grounded_spec = normalize_teacher_spec(extract_json(content))
+    grounded_spec["operation"] = operation
     write_json(out_dir / "teacher_grounding.json", grounded_spec)
     merged = merge_label(label, grounded_spec)
     metrics = validate_quadmask_spec(grounded_spec, video_meta(video_path))
+    accepted = bool(metrics.get("quadmask_spec_executable"))
+    base_row = rewrite_row_user_prompt_schema(row, merged, operation) if not args.no_rewrite_user_prompt_schema else row
     out_row = {
-        **row,
+        **base_row,
         "messages": [
-            row["messages"][0],
+            base_row["messages"][0],
             {"role": "assistant", "content": json.dumps(merged, ensure_ascii=False)},
         ],
         "metadata": {
@@ -340,6 +395,10 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str, Any]
             "grounded_spatial_supervision": True,
             "grounding_model": args.model,
             "grounding_debug_dir": str(out_dir),
+            "operation": operation,
+            "operation_source": operation_source,
+            "planner_user_prompt_schema": "e2w.planner_io.v6_executable.v1",
+            "accepted_for_sft": accepted,
         },
     }
     validated = {
@@ -347,9 +406,12 @@ def process_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str, Any]
         "sft_row": out_row,
         "metrics": metrics,
         "grounded_spec": grounded_spec,
+        "accepted_for_sft": accepted,
     }
     write_json(validated_path, validated)
-    return out_row
+    if accepted or args.allow_non_executable_output:
+        return out_row
+    return None
 
 
 def main() -> None:
@@ -366,12 +428,26 @@ def main() -> None:
     args.debug_dir.mkdir(parents=True, exist_ok=True)
     output_rows: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
+    review_queue: list[dict[str, Any]] = []
+    validation_rows: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
         print(f"[{idx}/{len(rows)}] relabel {row['id']}", flush=True)
         try:
             out_row = process_row(args, row)
             if out_row is not None:
                 output_rows.append(out_row)
+            validated_path = args.debug_dir / row["id"] / "validated.json"
+            if validated_path.exists():
+                validated = json.loads(validated_path.read_text(encoding="utf-8"))
+                validation_rows.append(validated)
+                if not validated.get("accepted_for_sft"):
+                    review_queue.append(
+                        {
+                            "sample_id": row["id"],
+                            "metrics": validated.get("metrics", {}),
+                            "debug_dir": str(args.debug_dir / row["id"]),
+                        }
+                    )
         except Exception as exc:
             failures.append({"sample_id": row["id"], "error": repr(exc)})
             write_json(args.debug_dir / row["id"] / "error.json", failures[-1])
@@ -392,9 +468,22 @@ def main() -> None:
         "selected": len(rows),
         "written": len(output_rows),
         "failures": failures,
+        "review_queue": str(args.debug_dir / "review_queue.json"),
+        "review_queue_count": len(review_queue),
         "dry_run": args.dry_run,
         "model": args.model,
+        "planner_user_prompt_schema": None if args.no_rewrite_user_prompt_schema else "e2w.planner_io.v6_executable.v1",
+        "validation": {
+            "rows": len(validation_rows),
+            "quadmask_schema_valid": sum(bool((v.get("metrics") or {}).get("quadmask_schema_valid")) for v in validation_rows),
+            "primary_bbox_valid": sum(bool((v.get("metrics") or {}).get("primary_bbox_valid")) for v in validation_rows),
+            "primary_point_valid": sum(bool((v.get("metrics") or {}).get("primary_point_valid")) for v in validation_rows),
+            "affected_grid_valid": sum(bool((v.get("metrics") or {}).get("affected_grid_valid")) for v in validation_rows),
+            "frame_index_valid": sum(bool((v.get("metrics") or {}).get("frame_index_valid")) for v in validation_rows),
+            "quadmask_spec_executable": sum(bool((v.get("metrics") or {}).get("quadmask_spec_executable")) for v in validation_rows),
+        },
     }
+    write_json(args.debug_dir / "review_queue.json", review_queue)
     write_json(args.debug_dir / "summary.json", summary)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
