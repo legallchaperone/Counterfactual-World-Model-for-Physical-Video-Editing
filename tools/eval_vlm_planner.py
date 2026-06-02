@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Artifact-level eval for the E2W v0 VLM planner checkpoint."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+import torch
+from peft import PeftModel
+from qwen_vl_utils import process_vision_info
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from e2w_v0_common import (  # noqa: E402
+    DEFAULT_BASE_MODEL,
+    DEFAULT_PLANNER,
+    DEFAULT_RUN_DIR,
+    DEFAULT_SPLIT,
+    ensure_run_dirs,
+    extract_first_frame,
+    link_or_copy,
+    load_jsonl,
+    normalize_to_e2w_contract,
+    parse_json_output,
+    serialize_vace_prompt,
+    summarize_boolean_metrics,
+    validate_edit_plan,
+    validate_quadmask_spec,
+    video_meta,
+    write_json,
+    write_text,
+)
+
+
+PLANNER_METRIC_KEYS = [
+    "json_parse_ok",
+    "schema_valid",
+    "quadmask_schema_valid",
+    "operation_accuracy",
+    "physical_consequences_nonempty",
+    "edited_scene_caption_nonempty",
+    "edited_scene_outcome_effects_nonempty",
+    "primary_prompt_valid",
+    "primary_bbox_valid",
+    "primary_point_valid",
+    "affected_grid_valid",
+    "frame_index_valid",
+    "coordinate_range_valid",
+    "quadmask_spec_executable",
+]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
+    parser.add_argument("--split-jsonl", type=Path, default=DEFAULT_SPLIT)
+    parser.add_argument("--adapter", type=Path, default=DEFAULT_PLANNER)
+    parser.add_argument("--base-model", type=Path, default=DEFAULT_BASE_MODEL)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--sample-id", action="append", default=[])
+    parser.add_argument("--max-new-tokens", type=int, default=1536)
+    parser.add_argument("--video-fps", type=float, default=1.0)
+    parser.add_argument("--min-pixels", type=int, default=50176)
+    parser.add_argument("--max-pixels", type=int, default=100352)
+    parser.add_argument("--force", action="store_true")
+    return parser.parse_args()
+
+
+def load_model(args: argparse.Namespace) -> tuple[Any, Any]:
+    processor = AutoProcessor.from_pretrained(args.adapter, trust_remote_code=True)
+    dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        args.base_model,
+        torch_dtype=dtype,
+        trust_remote_code=True,
+    )
+    if torch.cuda.is_available():
+        model = model.to("cuda")
+    model = PeftModel.from_pretrained(model, args.adapter).eval()
+    return processor, model
+
+
+def generate_one(args: argparse.Namespace, processor: Any, model: Any, sample: dict[str, Any]) -> str:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video",
+                    "video": sample["video"],
+                    "fps": args.video_fps,
+                    "min_pixels": args.min_pixels,
+                    "max_pixels": args.max_pixels,
+                },
+                {"type": "text", "text": sample["messages"][0]["content"]},
+            ],
+        }
+    ]
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+        **video_kwargs,
+    )
+    if torch.cuda.is_available():
+        inputs = {k: (v.to("cuda") if hasattr(v, "to") else v) for k, v in inputs.items()}
+    with torch.no_grad():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=args.max_new_tokens,
+            do_sample=False,
+        )
+    new_tokens = out[:, inputs["input_ids"].shape[1] :]
+    return processor.batch_decode(new_tokens, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+
+
+def write_source_artifacts(args: argparse.Namespace, sample: dict[str, Any]) -> dict[str, str]:
+    sample_id = sample["id"]
+    src_dir = args.run_dir / "source" / sample_id
+    video_src = Path(sample["video"])
+    video_dst = src_dir / "original_video.mp4"
+    link_or_copy(video_src, video_dst)
+    query = sample["messages"][0]["content"]
+    write_text(src_dir / "text_query.txt", query)
+    first_frame = src_dir / "first_frame.png"
+    if args.force or not first_frame.exists():
+        extract_first_frame(video_src, first_frame)
+    return {
+        "original_video": str(video_dst),
+        "text_query": str(src_dir / "text_query.txt"),
+        "first_frame": str(first_frame),
+    }
+
+
+def process_sample(args: argparse.Namespace, processor: Any, model: Any, sample: dict[str, Any]) -> dict[str, Any]:
+    sample_id = sample["id"]
+    pred_dir = args.run_dir / "planner_pred" / sample_id
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    source_paths = write_source_artifacts(args, sample)
+
+    raw_path = pred_dir / "raw_output.txt"
+    if args.force or not raw_path.exists():
+        started = time.time()
+        raw_text = generate_one(args, processor, model, sample)
+        write_text(raw_path, raw_text)
+        runtime = time.time() - started
+    else:
+        raw_text = raw_path.read_text(encoding="utf-8")
+        runtime = 0.0
+
+    meta = video_meta(Path(sample["video"]))
+    raw_json, parse_error = parse_json_output(raw_text)
+    metrics: dict[str, Any] = {
+        "sample_id": sample_id,
+        "json_parse_ok": raw_json is not None,
+        "parse_error": parse_error,
+        "generation_runtime_sec": runtime,
+        "video": meta,
+    }
+
+    if raw_json is None:
+        write_json(pred_dir / "planner_eval.json", metrics)
+        return {
+            "stage": "planner_eval",
+            "sample_id": sample_id,
+            "mode": "planner_pred",
+            "status": "planner_parse_failed",
+            "paths": {**source_paths, "raw_output": str(raw_path), "planner_eval": str(pred_dir / "planner_eval.json")},
+            "metrics": metrics,
+        }
+
+    edit_plan, quadmask_spec = normalize_to_e2w_contract(raw_json, sample, meta, source="planner_pred")
+    plan_metrics = validate_edit_plan(edit_plan)
+    spec_metrics = validate_quadmask_spec(quadmask_spec, meta)
+    metrics.update(plan_metrics)
+    metrics.update(spec_metrics)
+
+    write_json(pred_dir / "raw.pred.json", raw_json)
+    write_json(pred_dir / "edit_plan.pred.json", edit_plan)
+    write_json(pred_dir / "edit_plan.json", edit_plan)
+    write_json(pred_dir / "quadmask_spec.pred.json", quadmask_spec)
+    write_json(pred_dir / "quadmask_spec.json", quadmask_spec)
+    write_text(pred_dir / "vace_prompt.txt", serialize_vace_prompt(edit_plan))
+    write_json(pred_dir / "planner_eval.json", metrics)
+
+    return {
+        "stage": "planner_eval",
+        "sample_id": sample_id,
+        "mode": "planner_pred",
+        "status": "ok" if metrics["schema_valid"] else "planner_schema_failed",
+        "paths": {
+            **source_paths,
+            "raw_output": str(raw_path),
+            "raw_pred": str(pred_dir / "raw.pred.json"),
+            "edit_plan": str(pred_dir / "edit_plan.pred.json"),
+            "quadmask_spec": str(pred_dir / "quadmask_spec.pred.json"),
+            "vace_prompt": str(pred_dir / "vace_prompt.txt"),
+            "planner_eval": str(pred_dir / "planner_eval.json"),
+        },
+        "metrics": metrics,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    ensure_run_dirs(args.run_dir)
+    rows = load_jsonl(args.split_jsonl)
+    if args.sample_id:
+        wanted = set(args.sample_id)
+        rows = [r for r in rows if r["id"] in wanted]
+    if args.limit is not None:
+        rows = rows[: args.limit]
+    if not rows:
+        raise ValueError("No samples selected")
+
+    processor, model = load_model(args)
+    manifest_rows: list[dict[str, Any]] = []
+    metric_rows: list[dict[str, Any]] = []
+    for idx, sample in enumerate(rows, start=1):
+        print(f"[{idx}/{len(rows)}] planner eval {sample['id']}", flush=True)
+        entry = process_sample(args, processor, model, sample)
+        manifest_rows.append(entry)
+        metric_rows.append(entry["metrics"])
+
+    summary = summarize_boolean_metrics(metric_rows, PLANNER_METRIC_KEYS)
+    summary.update(
+        {
+            "run_dir": str(args.run_dir),
+            "split_jsonl": str(args.split_jsonl),
+            "adapter": str(args.adapter),
+            "base_model": str(args.base_model),
+            "generation": {
+                "temperature": 0,
+                "top_p": 1,
+                "do_sample": False,
+                "max_new_tokens": args.max_new_tokens,
+            },
+        }
+    )
+    write_json(args.run_dir / "planner_pred" / "summary.json", summary)
+
+    manifest_path = args.run_dir / "manifest.jsonl"
+    with manifest_path.open("w", encoding="utf-8") as f:
+        for entry in manifest_rows:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    print(json.dumps(summary, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
