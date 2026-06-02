@@ -54,6 +54,15 @@ Assumptions:
 
 Current Results:
 
+- Fresh SFT VLM planner run:
+  `/data/cwx/E2W/runs/e2w_vlm_remove8_full_20260602T134159Z`.
+- That run did use the SFT VLM planner checkpoint and wrote `raw_output.txt`
+  plus `raw.pred.json` for all 8 smoke samples.
+- It failed at the planner stage by contract before mask/Qwen/VACE:
+  `quadmask_spec_executable: 0/8`, `primary_bbox_valid: 0/8`,
+  `primary_point_valid: 0/8`, and `affected_grid_valid: 0/8`.
+- The failure is expected strict behavior. Do not continue to mask/Qwen/VACE
+  from this run unless planner output normalization/schema support is fixed.
 - Reference run:
   `/data/cwx/E2W/runs/e2w_v0_2_full_cuda_20260602T0720Z`.
 - That reference run reported 8/8 system interface ok, 8/8 Qwen interface ok,
@@ -74,17 +83,17 @@ Current Results:
 
 Current Blocker:
 
-- The next validation must run the SFT VLM planner checkpoint directly. If any
-  selected sample fails planner parse/schema/operation/quadmask validation, the
-  full pipeline must stop before mask/Qwen/VACE.
+- The SFT planner currently outputs old/non-executable grounding such as
+  `bbox_2d` or rectangle coordinates, while the strict quadmask builder expects
+  normalized executable keyframes/points/grid fields. Fix planner output schema
+  compatibility before the next full forward pass.
 
 Next Actions:
 
-- Run `eval_vlm_planner.py` through the canonical orchestrator for the 8 remove
-  smoke samples and confirm `raw_output.txt` plus `raw.pred.json` exist for
-  every sample.
-- Then run mask, Qwen first-frame, VACE, package/report, and update this Project
-  Status section with the new run directory, gates, and remaining review state.
+- Fix VLM planner output normalization/schema compatibility so the 8 smoke
+  planner predictions produce executable quadmask specs.
+- Re-run the 8 remove smoke samples. Only after planner passes should mask,
+  Qwen first-frame, VACE, package/report, and any add-on experiment run.
 
 ## Environment
 
