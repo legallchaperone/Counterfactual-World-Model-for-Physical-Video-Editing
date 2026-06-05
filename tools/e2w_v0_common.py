@@ -339,6 +339,62 @@ def planner_schema_prompt_text(operation: str = "remove") -> str:
     return json.dumps(planner_schema_template(operation), ensure_ascii=False)
 
 
+def planner_output_schema_v8_prompt_text() -> str:
+    return json.dumps(
+        {
+            "target_ref": "short visible reference to the edit target",
+            "edit_type": "remove",
+            "counterfactual_state": {
+                "fill_type": sorted(PLANNER_V8_FILL_TYPES),
+                "surface": "1-2 target-free sentences about material and texture filling the edited region.",
+                "lighting": "1-2 target-free sentences about lighting and highlight changes.",
+                "shadow": "1-2 target-free sentences about shadow and reflection changes.",
+                "temporal": "1-2 target-free sentences about cross-frame texture stability.",
+                "interaction": "1-2 target-free sentences about contact changes and nearby object response.",
+                "geometry": "1-2 target-free sentences about perspective and depth alignment.",
+            },
+            "if_removed": "One target-free natural-language summary synthesized from the six text fields.",
+        },
+        ensure_ascii=False,
+    )
+
+
+def build_planner_user_prompt_v8(
+    video_id: str,
+    user_request: str,
+    extra_rules: str | None = None,
+) -> str:
+    rules = [
+        "Return only one complete top-level JSON object. Do not include markdown, prose, or nested-only JSON fragments.",
+        "Do not output bbox, masks, keyframes, positive points, affected grids, quadmask_spec, video_id, task_type, edit_prompt, target_objects, protected_objects, event_summary, physical_causal_chain, quality_flags, if_added, affected_regions, unchanged_regions, or uncertainties.",
+        "The JSON must contain exactly these top-level fields: target_ref, edit_type, counterfactual_state, if_removed.",
+        "Set edit_type exactly to remove.",
+        "target_ref must be a concise visual reference to the target object requested by the user.",
+        "counterfactual_state must contain exactly seven fields: fill_type, surface, lighting, shadow, temporal, interaction, geometry.",
+        "fill_type must be exactly one enum value from: background_continuation, occlusion_reveal, contact_transition, fluid_deformation, object_absence.",
+        "The six text fields surface, lighting, shadow, temporal, interaction, and geometry must each be non-empty target-free free text, 1-2 sentences.",
+        "if_removed is copied into the VACE video prompt, so it must be target-free and must be one positive declarative sentence synthesized from the six text fields.",
+        "Forbidden in counterfactual_state text and if_removed: the removed target name, aliases, visible target parts, target material/color words, and negative wording such as no <target>, without <target>, <target> is removed, missing, gone, absent, no longer present, or where the target was.",
+        "Describe only non-target objects, local background, revealed surfaces, lighting/shadow/reflection changes, contact/interaction changes, geometry/depth alignment, and temporal consistency.",
+    ]
+    if extra_rules:
+        rules.append(extra_rules.strip())
+    return (
+        "You are the Edit2World SFT VLM planner. Given the image and user request, "
+        "return only valid JSON for the v8 tool-augmented planner schema.\n\n"
+        f"Schema version: {PLANNER_OUTPUT_SCHEMA_V8_VERSION}\n"
+        "Task operation: remove\n"
+        "\nThe JSON must match this planner schema:\n"
+        + planner_output_schema_v8_prompt_text()
+        + "\n\n"
+        "Current task:\n"
+        f"Set the implicit source video_id to {video_id}. Do not include video_id in the JSON.\n"
+        f"User request: {user_request.strip()}\n\n"
+        "Final rules for the current task:\n- "
+        + "\n- ".join(rules)
+    )
+
+
 def build_planner_user_prompt(
     video_id: str,
     user_request: str,

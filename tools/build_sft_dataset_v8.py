@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from e2w_v0_common import validate_planner_output_v8  # noqa: E402
+from e2w_v0_common import build_planner_user_prompt_v8, validate_planner_output_v8  # noqa: E402
 
 DEFAULT_INPUT = Path("/data/cwx/E2W/data/line_c_annotations/seed_150_v2.jsonl")
 DEFAULT_OUTPUT_DIR = Path("/data/cwx/E2W/data/planner_sft_v8")
@@ -95,13 +95,15 @@ def convert_row(row: dict[str, Any]) -> dict[str, Any]:
     if not ok:
         raise ValueError(f"Invalid planner v8 output for {source}/{row.get('video_id')}: {err}")
     instruction = str(row.get("instruction") or f"remove {row.get('target_ref')}").strip()
+    prompt = build_planner_user_prompt_v8(str(row.get("video_id") or ""), instruction)
     return {
+        "id": f"{source}:{row.get('video_id')}",
         "messages": [
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": str(image_path)},
-                    {"type": "text", "text": f"Edit instruction: {instruction}"},
+                    {"type": "text", "text": prompt},
                 ],
             },
             {
