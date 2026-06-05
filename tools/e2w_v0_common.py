@@ -24,6 +24,30 @@ DEFAULT_TEACHER_DIR = Path("/data/cwx/E2W/data/physics_iq_vlm_sft/teacher_labels
 PLANNER_IO_SCHEMA_VERSION = "e2w.planner_io.v6_executable.v1"
 EDIT_PLAN_SCHEMA_VERSION = "e2w.edit_plan.v1"
 QUADMASK_SPEC_SCHEMA_VERSION = "e2w.quadmask_spec.v1"
+PLANNER_OUTPUT_SCHEMA_V8_VERSION = "e2w.planner_output.v8_tool_augmented_grounding.v1"
+PLANNER_V8_FILL_TYPES = {
+    "background_continuation",
+    "occlusion_reveal",
+    "contact_transition",
+    "fluid_deformation",
+    "object_absence",
+}
+PLANNER_V8_COUNTERFACTUAL_TEXT_FIELDS = ("surface", "lighting", "shadow", "temporal", "interaction", "geometry")
+PLANNER_V8_COUNTERFACTUAL_STATE_FIELDS = ("fill_type", *PLANNER_V8_COUNTERFACTUAL_TEXT_FIELDS)
+PLANNER_OUTPUT_SCHEMA_V8: dict[str, Any] = {
+    "target_ref": str,
+    "edit_type": "remove",
+    "counterfactual_state": {
+        "fill_type": sorted(PLANNER_V8_FILL_TYPES),
+        "surface": str,
+        "lighting": str,
+        "shadow": str,
+        "temporal": str,
+        "interaction": str,
+        "geometry": str,
+    },
+    "if_removed": str,
+}
 PLANNER_REQUIRED_TOP_LEVEL_KEYS = (
     "video_id",
     "task_type",
@@ -1056,6 +1080,54 @@ def summarize_boolean_metrics(rows: list[dict[str, Any]], keys: list[str]) -> di
             "rate": (sum(vals) / len(vals)) if vals else 0.0,
         }
     return out
+
+
+def _planner_v8_edit_plan(obj: dict[str, Any], *, source_video_id: str = "unknown") -> dict[str, Any]:
+    state = obj.get("counterfactual_state") if isinstance(obj.get("counterfactual_state"), dict) else {}
+    state_values = [str(state.get(k) or "").strip() for k in PLANNER_V8_COUNTERFACTUAL_TEXT_FIELDS if str(state.get(k) or "").strip()]
+    target_ref = str(obj.get("target_ref") or "").strip()
+    instruction = f"remove {target_ref}" if target_ref else "remove the target object"
+    return {
+        "source_video_id": source_video_id,
+        "operation": "remove",
+        "edit_subject": {"label": target_ref, "aliases": [], "included_parts": []},
+        "operation_details": {
+            "target_object": {"label": target_ref},
+            "instruction": instruction,
+            "physical_consequences": state_values,
+            "protected_objects": [],
+        },
+        "edited_scene": {
+            "caption": str(obj.get("if_removed") or "").strip(),
+            "outcome_effects": state_values,
+        },
+    }
+
+
+def validate_planner_output_v8(obj: Any, *, source_video_id: str = "unknown") -> tuple[bool, str | None]:
+    if not isinstance(obj, dict):
+        return False, "planner v8 output must be a top-level JSON object"
+    target_ref = str(obj.get("target_ref") or "").strip()
+    if not target_ref:
+        return False, "target_ref must be non-empty"
+    if str(obj.get("edit_type") or "").strip() != "remove":
+        return False, "edit_type must be exactly 'remove'"
+    state = obj.get("counterfactual_state")
+    if not isinstance(state, dict):
+        return False, "counterfactual_state must be an object"
+    fill_type = str(state.get("fill_type") or "").strip()
+    if fill_type not in PLANNER_V8_FILL_TYPES:
+        return False, f"fill_type must be one of {sorted(PLANNER_V8_FILL_TYPES)}"
+    missing = [key for key in PLANNER_V8_COUNTERFACTUAL_STATE_FIELDS if not str(state.get(key) or "").strip()]
+    if missing:
+        return False, f"counterfactual_state fields must be non-empty: {', '.join(missing)}"
+    if not str(obj.get("if_removed") or "").strip():
+        return False, "if_removed must be non-empty"
+    try:
+        serialize_vace_prompt(_planner_v8_edit_plan(obj, source_video_id=source_video_id))
+    except VacePromptContractError as exc:
+        return False, str(exc)
+    return True, None
 
 
 def serialize_vace_prompt(edit_plan: dict[str, Any]) -> str:
