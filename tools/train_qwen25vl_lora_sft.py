@@ -54,28 +54,40 @@ class PlannerSFTDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         row = self.rows[idx]
-        user_text = row["messages"][0]["content"]
         assistant_text = row["messages"][1]["content"]
-        video_path = row["video"]
-        if not Path(video_path).exists():
-            raise FileNotFoundError(video_path)
-        return {
-            "id": row["id"],
-            "prompt_messages": [
+
+        # Legacy planner SFT rows store text in messages[0].content and a top-level
+        # video path. v8 Line-C rows store native Qwen VL image/text content in
+        # messages[0].content. Support both formats so old training commands keep
+        # working while image-only v8 SFT can reuse this trainer.
+        if "video" in row:
+            user_text = row["messages"][0]["content"]
+            video_path = row["video"]
+            if not Path(video_path).exists():
+                raise FileNotFoundError(video_path)
+            content = [
                 {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "video",
-                            "video": video_path,
-                            "fps": self.video_fps,
-                            "min_pixels": self.min_pixels,
-                            "max_pixels": self.max_pixels,
-                        },
-                        {"type": "text", "text": user_text},
-                    ],
-                }
-            ],
+                    "type": "video",
+                    "video": video_path,
+                    "fps": self.video_fps,
+                    "min_pixels": self.min_pixels,
+                    "max_pixels": self.max_pixels,
+                },
+                {"type": "text", "text": user_text},
+            ]
+        else:
+            content = row["messages"][0]["content"]
+            if not isinstance(content, list):
+                raise ValueError("v8 image SFT rows must store user content as a list")
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "image":
+                    image_path = item.get("image")
+                    if not image_path or not Path(str(image_path)).exists():
+                        raise FileNotFoundError(str(image_path))
+
+        return {
+            "id": row.get("id") or f"{row.get('source', 'unknown')}:{row.get('video_id', idx)}",
+            "prompt_messages": [{"role": "user", "content": content}],
             "assistant_text": assistant_text,
         }
 
