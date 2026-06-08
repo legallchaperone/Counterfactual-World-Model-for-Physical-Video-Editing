@@ -115,4 +115,4 @@ v8 不输出 executable quadmask spec，不是当前 v0.2 smoke chain 的 drop-i
 - `/data/cwx/E2W/runs/e2w_v6_final_rules_planner_remove8_20260603T1038Z`
 - `/data/cwx/E2W/runs/e2w_v6_base_planner_remove8_20260603TbaseZ`
 - `/data/cwx/E2W/runs/e2w_v0_2_full_cuda_20260602T0720Z`
-- `docs/vlm_planner_handoff_20260603.md`
+- `docs/archive/superseded-specs-20260608/vlm_planner_handoff_20260603.md`
