@@ -150,6 +150,14 @@ Do not use parallel names such as `prompt`, `text_prompt`, `video_prompt`, `edit
 
 `vace_prompt` describes the desired counterfactual edited scene.
 
+Producer rule:
+
+- `vace_prompt` must be produced by the actual upstream planner/model inference path for the run.
+- Runtime/VACE adapter code must not silently invent, hard-code, rewrite, or replace `vace_prompt`.
+- Experiment specs may define prompt constraints, but must not pre-fill the final `vace_prompt` string.
+- The runner must store the planner/model output as an upstream artifact and pass it through unchanged to the VACE runtime.
+- If planner output is weak, invalid, or visually poor, keep the run at the appropriate evidence level; do not substitute a teacher/manual prompt to make the pipeline look better.
+
 Rules for remove:
 
 - Must be target-free.
