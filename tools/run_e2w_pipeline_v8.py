@@ -9,6 +9,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,12 +21,13 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from peft import PeftModel
 from qwen_vl_utils import process_vision_info
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from e2w_v0_common import validate_planner_output_v8  # noqa: E402
+from e2w_v0_common import serialize_vace_prompt, validate_planner_output_v8  # noqa: E402
 
 
 DEFAULT_EVAL = Path("/data/cwx/E2W/data/planner_sft_v8/eval.jsonl")
@@ -36,6 +38,10 @@ DEFAULT_DINO_CKPT = Path("/data/cwx/edit2world-models/phase1/groundingdino_swint
 DEFAULT_SAM2_REPO = Path("/data/cwx/Edit2World-unified/external/sam2")
 DEFAULT_SAM2_CKPT = Path("/data/cwx/Edit2World-unified/checkpoints/sam2/sam2.1_hiera_large.pt")
 DEFAULT_SAM2_CFG = Path("/data/cwx/Edit2World-unified/external/sam2/sam2/configs/sam2.1/sam2.1_hiera_l.yaml")
+DEFAULT_PYTHON = Path("/data/cwx/conda/envs/edit2world-phase1-real/bin/python")
+DEFAULT_VACE_REPO = Path("/data/cwx/Edit2World-unified/external/VACE")
+DEFAULT_VACE_CKPT = Path("/data/cwx/Edit2World-unified/checkpoints/Wan2.1-VACE-14B")
+DEFAULT_QWEN_IMAGE_EDIT = Path("/data/cwx/Edit2World-unified/checkpoints/Qwen-Image-Edit")
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +61,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sam2-repo", type=Path, default=DEFAULT_SAM2_REPO)
     parser.add_argument("--sam2-checkpoint", type=Path, default=DEFAULT_SAM2_CKPT)
     parser.add_argument("--sam2-config", type=Path, default=DEFAULT_SAM2_CFG)
+    parser.add_argument("--python", type=Path, default=DEFAULT_PYTHON)
+    parser.add_argument("--vace-repo", type=Path, default=DEFAULT_VACE_REPO)
+    parser.add_argument("--vace-ckpt", type=Path, default=DEFAULT_VACE_CKPT)
+    parser.add_argument("--vace-model-name", default="vace-14B", choices=["vace-14B", "vace-1.3B"])
+    parser.add_argument("--vace-size", default="480p")
+    parser.add_argument("--vace-sample-steps", type=int, default=8)
+    parser.add_argument("--vace-base-seed", type=int, default=2025)
+    parser.add_argument("--vace-fps", type=float, default=6.0)
+    parser.add_argument("--skip-vace", action="store_true")
+    parser.add_argument("--qwen-image-edit-checkpoint", type=Path, default=DEFAULT_QWEN_IMAGE_EDIT)
+    parser.add_argument("--qwen-image-edit-seed", type=int, default=2025)
+    parser.add_argument("--qwen-image-edit-steps", type=int, default=12)
+    parser.add_argument("--qwen-image-edit-true-cfg-scale", type=float, default=4.0)
+    parser.add_argument("--skip-first-frame-edit", action="store_true")
     return parser.parse_args()
 
 
@@ -236,6 +256,253 @@ def save_mask_overlay(frame_path: Path, mask: np.ndarray, out_path: Path) -> Non
     cv2.imwrite(str(out_path), blended)
 
 
+def write_video_from_frames(
+    frame_paths: list[Path],
+    out_path: Path,
+    fps: float,
+    target_frame_count: int | None = None,
+    first_frame_override: Path | None = None,
+) -> None:
+    first = cv2.imread(str(frame_paths[0]), cv2.IMREAD_COLOR)
+    if first is None:
+        raise RuntimeError(f"failed to read image: {frame_paths[0]}")
+    height, width = first.shape[:2]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"failed to open video writer: {out_path}")
+    count = target_frame_count or len(frame_paths)
+    try:
+        for idx in range(count):
+            frame_path = first_frame_override if idx == 0 and first_frame_override is not None else frame_paths[min(idx, len(frame_paths) - 1)]
+            frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+            if frame is None:
+                raise RuntimeError(f"failed to read image: {frame_path}")
+            if frame.shape[:2] != (height, width):
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+            writer.write(frame)
+    finally:
+        writer.release()
+
+
+def write_gray_video(masks: np.ndarray, out_path: Path, fps: float) -> None:
+    height, width = masks.shape[1:]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"failed to open video writer: {out_path}")
+    try:
+        for mask in masks.astype(np.uint8):
+            writer.write(np.repeat(mask[:, :, None], 3, axis=2))
+    finally:
+        writer.release()
+
+
+def next_vace_frame_count(frame_count: int) -> int:
+    remainder = frame_count % 4
+    return frame_count if remainder == 1 else frame_count + ((1 - remainder) % 4)
+
+
+def pad_time_axis(array: np.ndarray, target_frame_count: int) -> np.ndarray:
+    if array.shape[0] == target_frame_count:
+        return array
+    if array.shape[0] > target_frame_count:
+        raise ValueError(f"cannot pad array with T={array.shape[0]} down to {target_frame_count}")
+    tail = np.repeat(array[-1:],
+                     target_frame_count - array.shape[0],
+                     axis=0)
+    return np.concatenate([array, tail], axis=0)
+
+
+def affected_region_from_mask(mask: np.ndarray, radius: int = 8) -> np.ndarray:
+    mo = mask.astype(bool)
+    kernel_size = radius * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    dilated = cv2.dilate(mo.astype(np.uint8), kernel, iterations=1) > 0
+    ys, xs = np.where(mo)
+    if len(xs) == 0:
+        return dilated
+    x1, x2 = int(xs.min()), int(xs.max())
+    y1, y2 = int(ys.min()), int(ys.max())
+    width = max(1, x2 - x1 + 1)
+    height = max(1, y2 - y1 + 1)
+    center = (int(round((x1 + x2) / 2.0)), int(round(y2 + 10)))
+    axes = (max(1, int(round(width * 1.2 / 2.0))), max(1, int(round(height * 0.2 / 2.0))))
+    ellipse = np.zeros_like(mo, dtype=np.uint8)
+    cv2.ellipse(ellipse, center, axes, 0, 0, 360, 255, -1)
+    blur_ksize = max(3, radius * 2 + 1)
+    if blur_ksize % 2 == 0:
+        blur_ksize += 1
+    blurred = cv2.GaussianBlur(ellipse, (blur_ksize, blur_ksize), 0) > 16
+    return dilated | blurred
+
+
+def build_quadmask(masks: dict[int, np.ndarray], frame_count: int, height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
+    quad = np.full((frame_count, height, width), 255, dtype=np.uint8)
+    for frame_idx in range(frame_count):
+        mask = masks.get(frame_idx)
+        if mask is None:
+            mo = np.zeros((height, width), dtype=bool)
+        else:
+            mo = mask.astype(bool)
+            if mo.shape != (height, width):
+                mo = cv2.resize(mo.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST) > 0
+        ma = affected_region_from_mask(mo)
+        quad[frame_idx][mo & ~ma] = 0
+        quad[frame_idx][mo & ma] = 63
+        quad[frame_idx][~mo & ma] = 127
+    generation_mask = np.where(quad != 255, 255, 0).astype(np.uint8)
+    return quad, generation_mask
+
+
+def save_quadmask_preview(frame_path: Path, quad_frame: np.ndarray, out_path: Path) -> None:
+    image = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError(f"failed to read image: {frame_path}")
+    if quad_frame.shape[:2] != image.shape[:2]:
+        quad_frame = cv2.resize(quad_frame, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+    colors = {
+        0: np.array([0, 0, 255], dtype=np.uint8),
+        63: np.array([0, 128, 255], dtype=np.uint8),
+        127: np.array([0, 255, 255], dtype=np.uint8),
+        255: np.array([160, 160, 160], dtype=np.uint8),
+    }
+    overlay = image.copy()
+    for value, color in colors.items():
+        region = quad_frame == value
+        overlay[region] = (0.35 * overlay[region] + 0.65 * color).astype(np.uint8)
+    blended = cv2.addWeighted(image, 0.55, overlay, 0.45, 0)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), blended)
+
+
+def render_vace_prompt_from_v8(parsed: dict[str, Any], video_id: str) -> tuple[str, bool, str | None]:
+    state = parsed.get("counterfactual_state") if isinstance(parsed.get("counterfactual_state"), dict) else {}
+    keys = ["surface", "lighting", "shadow", "temporal", "interaction", "geometry"]
+    parts = [str(state.get(key) or "").strip().rstrip(".") for key in keys if str(state.get(key) or "").strip()]
+    prompt = ". ".join(parts).strip()
+    if prompt and not prompt.endswith("."):
+        prompt += "."
+    edit_plan = {
+        "source_video_id": video_id,
+        "operation": "remove",
+        "edit_subject": {"label": str(parsed.get("target_ref") or "").strip(), "aliases": [], "included_parts": []},
+        "operation_details": {
+            "target_object": {"label": str(parsed.get("target_ref") or "").strip()},
+            "physical_consequences": [],
+            "protected_objects": [],
+        },
+        "edited_scene": {"caption": prompt, "outcome_effects": []},
+    }
+    try:
+        serialize_vace_prompt(edit_plan)
+    except Exception as exc:
+        return prompt, False, f"{type(exc).__name__}: {exc}"
+    return prompt, True, None
+
+
+def run_first_frame_edit(args: argparse.Namespace, anchor: Path, target_ref: str, video_id: str) -> tuple[bool, str | None, dict[str, Any]]:
+    if args.skip_first_frame_edit:
+        return False, None, {"skipped": True, "reason": "--skip-first-frame-edit"}
+
+    from diffusers import QwenImageEditPipeline  # noqa: WPS433
+
+    image = Image.open(anchor).convert("RGB")
+    prompt = f"remove {target_ref}"
+    dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+    pipe = QwenImageEditPipeline.from_pretrained(str(args.qwen_image_edit_checkpoint), torch_dtype=dtype)
+    if torch.cuda.is_available():
+        pipe = pipe.to("cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    generator = torch.Generator(device=device).manual_seed(args.qwen_image_edit_seed)
+    out_path = args.output_dir / f"edited_frame_{video_id}.jpg"
+    result = pipe(
+        image,
+        prompt=prompt,
+        negative_prompt=" ",
+        num_inference_steps=args.qwen_image_edit_steps,
+        generator=generator,
+        true_cfg_scale=args.qwen_image_edit_true_cfg_scale,
+        num_images_per_prompt=1,
+    ).images[0]
+    raw_size = result.size
+    if raw_size != image.size:
+        result = result.resize(image.size, Image.Resampling.LANCZOS)
+    result.save(out_path, quality=95)
+    del pipe
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return True, str(out_path), {
+        "instruction": prompt,
+        "source_image": str(anchor),
+        "edited_frame": str(out_path),
+        "seed": args.qwen_image_edit_seed,
+        "steps": args.qwen_image_edit_steps,
+        "true_cfg_scale": args.qwen_image_edit_true_cfg_scale,
+        "source_size": list(image.size),
+        "raw_output_size": list(raw_size),
+        "edited_size": list(Image.open(out_path).size),
+        "target_mask_consumed_by_backend": False,
+    }
+
+
+def run_vace(args: argparse.Namespace, video_id: str, src_video: Path, generation_mask_video: Path, quadmask_npy: Path, prompt: str, frame_num: int) -> tuple[str | None, dict[str, Any]]:
+    save_dir = args.output_dir / f"vace_{video_id}"
+    output_video = args.output_dir / f"edited_video_{video_id}.mp4"
+    command = [
+        str(args.python.resolve()),
+        str((Path(__file__).resolve().parent / "run_wan_vace_quad_i2v.py").resolve()),
+        "--vace_repo",
+        str(args.vace_repo.resolve()),
+        "--ckpt_dir",
+        str(args.vace_ckpt.resolve()),
+        "--model_name",
+        args.vace_model_name,
+        "--size",
+        args.vace_size,
+        "--src_video",
+        str(src_video.resolve()),
+        "--generation_mask",
+        str(generation_mask_video.resolve()),
+        "--quadmask_npy",
+        str(quadmask_npy.resolve()),
+        "--operation",
+        "remove",
+        "--prompt",
+        prompt,
+        "--frame_num",
+        str(frame_num),
+        "--save_dir",
+        str(save_dir.resolve()),
+        "--save_file",
+        str(output_video.resolve()),
+        "--base_seed",
+        str(args.vace_base_seed),
+        "--sample_steps",
+        str(args.vace_sample_steps),
+        "--offload_model",
+    ]
+    save_dir.mkdir(parents=True, exist_ok=True)
+    write_json(save_dir / "vace_command.json", {"argv": command, "cwd": str(Path.cwd())})
+    env = os.environ.copy()
+    env.setdefault("USE_TF", "0")
+    env.setdefault("TRANSFORMERS_NO_TF", "1")
+    proc = subprocess.run(command, cwd=str(Path.cwd()), env=env, text=True, capture_output=True, check=False)
+    (save_dir / "vace_stdout.txt").write_text(proc.stdout, encoding="utf-8")
+    (save_dir / "vace_stderr.txt").write_text(proc.stderr, encoding="utf-8")
+    info = {
+        "returncode": proc.returncode,
+        "command_path": str(save_dir / "vace_command.json"),
+        "stdout_path": str(save_dir / "vace_stdout.txt"),
+        "stderr_path": str(save_dir / "vace_stderr.txt"),
+    }
+    if proc.returncode != 0:
+        info["error"] = f"VACE command failed with return code {proc.returncode}"
+        return None, info
+    return str(output_video), info
+
+
 def detect_bbox(args: argparse.Namespace, dino_model: Any, image_path: Path, target_ref: str) -> tuple[tuple[int, int, int, int], float]:
     from groundingdino.util.inference import load_image, predict  # noqa: WPS433
 
@@ -367,14 +634,100 @@ def main() -> int:
                 out_path = args.output_dir / f"debug_mask_{video_id}_{frame_idx}.jpg"
                 save_mask_overlay(frames[frame_idx], masks[frame_idx], out_path)
                 mask_debug_paths.append(str(out_path))
+
+            anchor_image = cv2.imread(str(anchor), cv2.IMREAD_COLOR)
+            if anchor_image is None:
+                raise RuntimeError(f"failed to read image: {anchor}")
+            height, width = anchor_image.shape[:2]
+            quadmask, generation_mask = build_quadmask(masks, len(frames), height, width)
+            quadmask_path = args.output_dir / f"quadmask_{video_id}.npy"
+            generation_mask_path = args.output_dir / f"generation_mask_{video_id}.npy"
+            np.save(quadmask_path, quadmask)
+            np.save(generation_mask_path, generation_mask)
+            mid_idx = len(frames) // 2
+            quadmask_debug_path = args.output_dir / f"debug_quadmask_{video_id}_mid.jpg"
+            save_quadmask_preview(frames[mid_idx], quadmask[mid_idx], quadmask_debug_path)
+
+            vace_prompt = ""
+            vace_prompt_valid = False
+            vace_prompt_error = "planner output was not parsed"
+            vace_output_path: str | None = None
+            vace_info: dict[str, Any] = {}
+            parsed = item["parsed"]
+            if isinstance(parsed, dict):
+                vace_prompt, vace_prompt_valid, vace_prompt_error = render_vace_prompt_from_v8(parsed, video_id)
+
+            first_frame_edit_ok = False
+            edited_frame_path: str | None = None
+            first_frame_edit_info: dict[str, Any] = {}
+            if vace_prompt_valid and not args.skip_vace:
+                first_frame_edit_ok, edited_frame_path, first_frame_edit_info = run_first_frame_edit(args, anchor, target_ref, video_id)
+
+            if vace_prompt_valid and not args.skip_vace:
+                if not first_frame_edit_ok or edited_frame_path is None:
+                    raise RuntimeError("first frame edit did not produce an edited frame for VACE")
+                vace_frame_count = next_vace_frame_count(len(frames))
+                vace_quadmask = pad_time_axis(quadmask, vace_frame_count)
+                vace_generation_mask = pad_time_axis(generation_mask, vace_frame_count)
+                vace_quadmask_path = args.output_dir / f"quadmask_{video_id}_vace.npy"
+                vace_generation_mask_npy_path = args.output_dir / f"generation_mask_{video_id}_vace.npy"
+                vace_generation_mask_video_path = args.output_dir / f"generation_mask_{video_id}.mp4"
+                src_video_path = args.output_dir / f"src_video_{video_id}.mp4"
+                np.save(vace_quadmask_path, vace_quadmask)
+                np.save(vace_generation_mask_npy_path, vace_generation_mask)
+                write_gray_video(vace_generation_mask, vace_generation_mask_video_path, args.vace_fps)
+                write_video_from_frames(
+                    frames,
+                    src_video_path,
+                    args.vace_fps,
+                    target_frame_count=vace_frame_count,
+                    first_frame_override=Path(edited_frame_path),
+                )
+                vace_output_path, vace_info = run_vace(
+                    args,
+                    video_id,
+                    src_video_path,
+                    vace_generation_mask_video_path,
+                    vace_quadmask_path,
+                    vace_prompt,
+                    vace_frame_count,
+                )
+                vace_info.update(
+                    {
+                        "src_video": str(src_video_path),
+                        "src_video_first_frame": edited_frame_path,
+                        "vace_frame_count": vace_frame_count,
+                        "quadmask_vace_npy": str(vace_quadmask_path),
+                        "generation_mask_vace_npy": str(vace_generation_mask_npy_path),
+                        "generation_mask_video": str(vace_generation_mask_video_path),
+                    }
+                )
+            elif vace_prompt_valid and args.skip_vace:
+                vace_info = {"skipped": True, "reason": "--skip-vace"}
+            else:
+                vace_info = {"skipped": True, "reason": vace_prompt_error}
             record.update(
                 {
                     "status": "ok",
                     "bbox_xyxy": list(bbox),
                     "bbox_confidence": confidence,
                     "mask_mean_area": float(np.mean(mask_areas)),
+                    "quadmask_q0_mean_area": float(np.mean(quadmask == 0)),
+                    "quadmask_q2_mean_area": float(np.mean(quadmask == 127)),
+                    "vace_prompt": vace_prompt,
+                    "vace_prompt_preview": vace_prompt[:60],
+                    "vace_prompt_valid": vace_prompt_valid,
+                    "vace_prompt_error": vace_prompt_error,
+                    "first_frame_edit_ok": first_frame_edit_ok,
+                    "edited_first_frame": edited_frame_path,
+                    "first_frame_edit_info": first_frame_edit_info,
+                    "vace_output_path": vace_output_path,
+                    "vace_info": vace_info,
                     "debug_grounding": str(grounding_path),
                     "debug_masks": mask_debug_paths,
+                    "debug_quadmask": str(quadmask_debug_path),
+                    "quadmask_npy": str(quadmask_path),
+                    "generation_mask_npy": str(generation_mask_path),
                     "frame_count": len(frames),
                     "mask_frame_count": len(masks),
                 }
@@ -382,7 +735,9 @@ def main() -> int:
             print(
                 f"{video_id} | {target_ref[:40]} | "
                 f"bbox({bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}) | "
-                f"{confidence:.4f} | {float(np.mean(mask_areas)):.6f}",
+                f"{confidence:.4f} | {float(np.mean(mask_areas)):.6f} | "
+                f"q0={float(np.mean(quadmask == 0)):.6f} q2={float(np.mean(quadmask == 127)):.6f} | "
+                f"first_frame={first_frame_edit_ok} vace_valid={vace_prompt_valid} vace_output={vace_output_path}",
                 flush=True,
             )
         except Exception as exc:
