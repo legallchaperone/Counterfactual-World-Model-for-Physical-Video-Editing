@@ -409,8 +409,10 @@ def build_planner_user_prompt(
         "Do not output the old empty quadmask_spec schema {\"primary\": {}, \"affected\": {}, \"keep\": {}}.",
         "Set quadmask_spec.operation equal to task_type.",
         "For add operations, describe placement and added visual effects such as contact shadow when visible or physically expected.",
-        "For remove operations, keep counterfactual/VACE-facing text target-free: do not name the removed target or visible target subparts/materials in counterfactual_expectation.if_removed.",
         "When a visible non-target object count is clear and relevant, include it explicitly, for example one potato or two dominoes. Do not invent counts when uncertain.",
+        "Critical for remove operations: counterfactual_expectation.if_removed is copied into the VACE video prompt, so it must be target-free.",
+        "Forbidden in counterfactual_expectation.if_removed for remove operations: the removed target name, aliases, visible target parts, target material words, and negative wording such as no <target>, without <target>, <target> is removed, or <target> is no longer present.",
+        "For remove operations, counterfactual_expectation.if_removed should describe only non-target objects, local background, revealed surfaces, lighting/shadow/reflection changes, and resulting physical motion.",
     ]
     if extra_rules:
         rules.append(extra_rules.strip())
@@ -419,13 +421,14 @@ def build_planner_user_prompt(
         "return only valid JSON for the executable planner schema.\n\n"
         f"Schema version: {PLANNER_IO_SCHEMA_VERSION}\n"
         f"Task operation: {op}\n"
-        "Rules:\n- "
-        + "\n- ".join(rules)
-        + "\n\nThe JSON must match this planner schema:\n"
+        "\nThe JSON must match this planner schema:\n"
         + planner_schema_prompt_text(op)
         + "\n\n"
+        "Current task:\n"
         f"Set video_id exactly to {video_id}.\n"
-        f"User request: {user_request.strip()}"
+        f"User request: {user_request.strip()}\n\n"
+        "Final rules for the current task:\n- "
+        + "\n- ".join(rules)
     )
 
 

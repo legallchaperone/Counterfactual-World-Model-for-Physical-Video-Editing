@@ -1,6 +1,6 @@
 # E2W Runtime Contract
 
-Last updated: 2026-06-02 UTC
+Last updated: 2026-06-03 UTC
 
 This document defines the runtime contract for the local E2W smoke pipeline. It separates historical interface versions from the current v0.3 target so that reports do not overstate what the model actually consumed.
 
@@ -39,6 +39,47 @@ object is valid JSON.
 The executable schema checks are enforced by `tests/test_v02_contracts.py`.
 Do not weaken those checks to pass a run; fix the planner data, prompt, or
 checkpoint.
+
+## Planner User Prompt Contract
+
+Canonical planner train/eval/smoke JSONL rows use the prompt emitted by
+`tools/e2w_v0_common.py::build_planner_user_prompt`.
+
+The prompt layout is fixed:
+
+1. planner role and `e2w.planner_io.v6_executable.v1` schema version
+2. task operation
+3. full planner schema JSON
+4. current task with exact `video_id` and user request
+5. final rules for the current task
+
+Do not add one-shot wrapper objects such as `input_video_id`,
+`input_user_request`, `good_complete_output`, or `output_excerpt`. Prompt-only
+experiments showed the current LoRA copies those wrapper keys and fails strict
+top-level planner JSON parsing. If examples are needed, they must be trained as
+assistant labels, not embedded as wrapper examples in the inference prompt.
+
+The final rules are part of the schema contract:
+
+- output exactly one complete top-level planner JSON object
+- include executable quadmask grounding fields
+- use norm1000 coordinates for bbox and points
+- use A1-style grid cells with A1 at the top-left
+- never emit the archived empty `quadmask_spec` schema
+- set `quadmask_spec.operation` equal to `task_type`
+- for remove operations, `counterfactual_expectation.if_removed` is copied
+  into the VACE video prompt and must be target-free
+- forbidden in remove `if_removed`: the removed target name, aliases, visible
+  target parts, target material words, and negative wording such as
+  `no <target>`, `without <target>`, `<target> is removed`, or
+  `<target> is no longer present`
+- remove `if_removed` should describe only non-target objects, local
+  background, revealed surfaces, lighting/shadow/reflection changes, and
+  resulting physical motion
+
+Train and eval JSONLs must use the same prompt contract. Rewriting only eval
+prompts is an invalid comparison because the SFT LoRA is sensitive to prompt
+distribution shift.
 
 ## v0.2 Runtime Contract
 

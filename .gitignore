@@ -5,6 +5,8 @@
 /outputs
 /runs
 /tmp
+.pi/
+docs/APIs
 
 __pycache__/
 *.py[cod]
