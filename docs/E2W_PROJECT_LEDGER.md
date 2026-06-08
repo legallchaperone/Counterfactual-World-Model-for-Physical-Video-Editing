@@ -2,7 +2,7 @@
 
 > **Owner / update convention:** This file is the assistant-maintained continuity ledger for E2W. The user asked that Hermes maintains it. Treat it as a project state ledger, not a scratchpad. Update it only when a durable fact, boundary decision, verified artifact, or next-step priority changes. Do not use it for transient task notes.
 
-Last updated: 2026-06-08T16:10:14Z
+Last updated: 2026-06-08T17:25:00Z
 Maintainer skill: `e2w-project-ledger`
 Canonical repo: `ssh cwx:/home/cwx/E2W`
 Current spec: `/home/cwx/E2W/docs/E2W_SPEC.md`
@@ -121,13 +121,21 @@ Current understanding:
 
 - The current spec replaces older runtime variants with one VACE input contract.
 - Runtime interface success does not prove learned quadmask semantics.
-- Real evidence required: operation swap, quadmask perturbation, Q2 response, Q3 preservation, and ablations.
+- The unmerged worktree `feat/phase1-v04-control-branch` is at `1f17ea4` and contains code-side training-format fixes aligned with `docs/E2W_SPEC.md`:
+  - `edited_first_frame` conditioning replaces source-frame conditioning in `tools/train_v04_control_branch_real_overfit.py`;
+  - full-domain generation mask is synthesized in the training script and recorded as non-semantic;
+  - `vace_prompt` naming is required by the training script;
+  - Q3 latent MSE loss is present.
+- The historical real 14B overfit run `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_20260604` predates those fixes. It reached `final_gate = 0.022334493696689606`, but its `metrics.jsonl` does not contain the new Q3/full-domain-mask metadata fields. Treat it as stale training evidence.
+- The current branch tests verified during audit: `tests.test_v04_anchor_manifest_audit`, `tests.test_v04_control_branch_freeze`, and `tests.test_v04_control_branch_gradients` ran 19 tests OK.
+- Real evidence still required: rerun real training after the 1f17 fixes, then operation swap, quadmask perturbation, Q2 response, Q3 preservation, and ablations.
 
 Do not claim:
 
 - VACE has learned add/remove semantics from interface success;
 - control branch works visually without sensitivity tests;
-- generation-mask behavior proves E2W semantic control.
+- generation-mask behavior proves E2W semantic control;
+- the stale 14B run proves the corrected training format works.
 
 ### C. Data / Anchors
 

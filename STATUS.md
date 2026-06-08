@@ -74,15 +74,30 @@ v8 不输出 executable quadmask spec，不是当前 v0.2 smoke chain 的 drop-i
 
 该路线独立于 planner SFT 训练，目标是训练 VACE 侧的 gated causal control branch。
 
-截至 2026-06-04 的记录：
+已核查状态（2026-06-08）：
 
+- worktree: `/home/cwx/E2W/.worktree/feat/phase1-v04-control-branch`
+- branch head: `1f17ea4 按 E2W_SPEC 修正 VACE 训练元数据`
 - B1 下载 80 条 Pexels raw videos: `8de58bb`
 - B2 标准化 80 条候选背景 `[81,480,832,3]`: `4b234e7`
 - B3 筛选 16 条 clean backgrounds，58/80 自动通过: `fc39ad0`
 - B4 生成 SI-A/B/C composites，12 个，0 audit failure: `b121c51`
   - train manifest 16 行，8 add + 8 remove
   - eval manifest 8 行，4 add + 4 remove
-- B5 后续状态需要从 control-branch 工作树或对应 artifacts 重新确认。
+- `overfit_16.jsonl` 已有 16 行，8 add + 8 remove，并包含 `edited_first_frame` 和 `vace_prompt` 字段。
+- 训练脚本 `tools/train_v04_control_branch_real_overfit.py` 已改为：
+  - 使用 `edited_first_frame` 构造 VACE conditioning；
+  - 在训练脚本内合成 full-domain generation mask；
+  - 使用 `vace_prompt`；
+  - 加入 Q3 latent MSE loss。
+- 历史真实 14B run `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_20260604` 在这些修正之前产生，`final_gate = 0.022334493696689606`，不能证明修正后的训练格式有效。
+- 已验证 branch tests: `tests.test_v04_anchor_manifest_audit`, `tests.test_v04_control_branch_freeze`, `tests.test_v04_control_branch_gradients` 共 19 tests OK。
+
+仍未完成：
+
+- 按 1f17 修正后的格式重跑真实 14B overfit。
+- operation swap / Q0 perturbation / Q2 perturbation / Q3 preservation 验收。
+- Phase 1B Kubric/HUMOTO 真实物理 counterfactual pairs。
 
 线 A 和线 B 只在推理时汇合：
 
