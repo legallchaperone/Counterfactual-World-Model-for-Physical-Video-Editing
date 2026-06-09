@@ -61,13 +61,13 @@ Evidence level: STRUCTURAL for planner text/schema compliance only.
 
 ### 当前缺口
 
-Counterfactual Planner 尚未完成 current runtime 对齐：
+Counterfactual Planner 已完成一轮 code-side current runtime 对齐修正，但尚未完成 structural smoke 验收：
 
 - grounding bridge 还没有被验收为 current spec 的结构性基准；
 - `target_ref -> quadmask_npy` 需要稳定审计；
-- `generation_mask` 必须改为 current spec 的 full-domain all-255，而不是从 quadmask 派生局部 mask；
-- VACE 层 metadata 必须记录 E2W-level 名称：`vace_conditioning_video`, `vace_prompt`, `quadmask_npy`, `generation_mask`, `operation`, `frame_num`；
-- 不能把 backend adapter 的 `src_video` / `prompt` 名称当作当前 E2W runtime contract；
+- `tools/run_counterfactual_planner_pipeline.py` 已改为生成 full-domain all-255 `generation_mask`，不再从 quadmask 派生局部 semantic mask；
+- VACE 层 metadata 已记录 E2W-level 六输入名称：`vace_conditioning_video`, `vace_prompt`, `quadmask_npy`, `generation_mask`, `operation`, `frame_num`；
+- backend adapter 的 `src_video` / `prompt` 名称只作为内部 adapter command 记录，不作为 current E2W runtime contract；
 - 还没有 Counterfactual Planner full bridge 的 30 eval / smoke structural gate。
 
 ## Archived Planner References
@@ -152,15 +152,21 @@ Artifact audit on 2026-06-09 found a prompt-contract gap:
 
 Therefore this run remains INTERFACE/provenance smoke only. It does not prove contract-safe add prompting, visual quality, learned planner add quality, or learned VACE add semantics.
 
+Code-side follow-up on 2026-06-09:
+
+- add runner 不再用 archived v6 executable planner prompt builder；
+- add planner split prompt 改为 current add contract，要求 model-produced `vace_prompt`、top-level `target_ref`、正向 add wording、point/bbox grounding；
+- metadata 改为记录 top-level raw `target_ref`，并记录 `vace_conditioning_video` future frames 为 zero-filled placeholders。
+
 ## 当前阻塞点
 
-主 blocker 是 Counterfactual Planner 已经成为正确 planner design，但后续 grounding bridge / runtime adapter 仍未按 current spec 收敛。
+主 blocker 是 Counterfactual Planner 已经成为正确 planner design，grounding bridge / runtime adapter 已做 code-side current-spec 修正，但尚未通过 structural smoke 验收。
 
 当前不要从 archived executable-planner checkpoint 继续跑 full forward pass。
 
 ## Next Actions
 
-- [ ] 1. 修正 `tools/run_counterfactual_planner_pipeline.py` 的 bridge contract，使输出符合 `docs/E2W_SPEC.md`：
+- [x] 1. 修正 `tools/run_counterfactual_planner_pipeline.py` 的 bridge contract，使输出符合 `docs/E2W_SPEC.md`：
   - `generation_mask` full-domain all-255；
   - metadata 使用 E2W-level 六输入命名；
   - backend `src_video`/`prompt` 只作为 adapter 内部名；

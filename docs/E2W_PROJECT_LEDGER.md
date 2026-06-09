@@ -2,7 +2,7 @@
 
 > **Owner / update convention:** This file is the assistant-maintained continuity ledger for E2W. The user asked that Hermes maintains it. Treat it as a project state ledger, not a scratchpad. Update it only when a durable fact, boundary decision, verified artifact, or next-step priority changes. Do not use it for transient task notes.
 
-Last updated: 2026-06-09T10:45:00Z
+Last updated: 2026-06-09T10:45:58Z
 Maintainer skill: `e2w-project-ledger`
 Canonical repo: `ssh cwx:/home/cwx/E2W`
 Current spec: `/home/cwx/E2W/docs/E2W_SPEC.md`
@@ -139,7 +139,7 @@ Current understanding:
 - Counterfactual Planner is the current correct planner design.
 - Its compatible schema id is `e2w.planner_output.v8_tool_augmented_grounding.v1`; keep this string for artifact compatibility only.
 - Counterfactual Planner is strong on parse/schema/target-free counterfactual text and should be the basis for current planner work.
-- The remaining main gap is making the Counterfactual Planner grounding bridge and runtime adapter conform to `docs/E2W_SPEC.md`.
+- The Counterfactual Planner grounding bridge and runtime adapter have code-side current-spec fixes for full-domain generation masks, E2W-level VACE input metadata, and adapter-name separation. The remaining main gap is structural smoke verification of that bridge.
 - Archived executable-planner materials are archived historical evidence.
 
 Do not claim:
@@ -199,6 +199,7 @@ Current understanding:
 - Branch `feat/add-pipeline` adds an add INTERFACE smoke runner using real planner/model inference (`original video + user prompt -> planner/model -> vace_prompt`), Qwen Edit first-frame materialization, SAM2 on `edited_first_frame`, full-domain all-255 generation mask, and VACE.
 - Verified add INTERFACE run: `/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z` produced `edited_video.mp4` with `metadata.json` acceptance checks passing. Evidence level remains INTERFACE only; visual quality was not evaluated.
 - Follow-up artifact audit on 2026-06-09 found the run metadata's actual add `vace_prompt` contains remove-residue text: `The red mug is no longer present on the table.` This violates the current add prompt rule in `docs/E2W_SPEC.md`. Treat the run as add INTERFACE/provenance smoke only, not as contract-safe add prompt STRUCTURAL evidence.
+- Code-side follow-up on 2026-06-09 changed the add runner prompt path to avoid archived v6 executable schema wording and require current add fields: model-produced `vace_prompt`, top-level `target_ref`, positive add wording, and point/bbox grounding. No fresh add acceptance run has been completed after this fix.
 - In that run, planner output was not manually modified and no teacher/manual `vace_prompt` was used. The planner produced valid add operation and primary point grounding but no bbox; the add runner accepted point-only grounding for SAM2 and recorded `accepted_point_only_for_add_interface=true`.
 - A historical 0076 add-mug full pipeline artifact exists and passed machine/interface checks under older docs, but it used teacher/manual artifacts, not learned VLM planner add inference.
 - Add visual success and learned VACE add semantics are not established.
@@ -211,7 +212,7 @@ Important historical run:
 
 Claim boundary:
 
-> Add pipeline now has one real-planner INTERFACE/provenance smoke success plus one older teacher/manual 0076 smoke artifact. The current real-planner add run has an add prompt-contract gap, so learned planner add quality, contract-safe add prompting, visual success, and learned VACE add semantics are not established.
+> Add pipeline now has one real-planner INTERFACE/provenance smoke success plus one older teacher/manual 0076 smoke artifact. The current real-planner add run has an add prompt-contract gap, and the code-side prompt fix has not yet been rerun as acceptance evidence, so learned planner add quality, contract-safe add prompting, visual success, and learned VACE add semantics are not established.
 
 ---
 
@@ -247,7 +248,7 @@ Verify the grounding bridge and current runtime mapping:
   - metadata links planner JSON -> grounding -> quadmask -> VACE inputs.
 ```
 
-Avoid long full-pipeline runs until this Counterfactual Planner structural spine is proven.
+The code-side bridge mapping now targets these bullets, but the proof still requires a fresh structural smoke run. Avoid long full-pipeline runs until this Counterfactual Planner structural spine is proven.
 
 ---
 
