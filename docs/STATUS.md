@@ -1,33 +1,15 @@
 # E2W STATUS
 
-## 当前状态（2026-06-04）
+当前项目状态真源是根目录 `STATUS.md`。
 
-### 线 A — Planner 训练（main branch）
+本文件只保留摘要，避免 `docs/STATUS.md` 和根 `STATUS.md` 分叉。
 
-- 数据：`v7_targetfree_final`，train 262 行 / eval 30 行，全部通过 validator。
-- 最新 checkpoint：`vlm_planner_lora_physics_iq_v7_targetfree_final_20260604`。
-- Gate 结果：remove8 1/8 pass。
-- 实验 A6/A7：同模型自改写实验，3/7 pass；但 A7 显示模型无法遵从“禁止负向陈述”指令，始终输出 `with no X` 句式。
-- 结论：prompt 工程到头，根本原因是训练数据未覆盖正向描述反事实场景的写法。
-- 待做 A8：补充人工写的正向 gold label 训练数据。
-- 详细实验记录：`docs/experiments/A6_self_correction_20260604.md`。
+最后同步：2026-06-08 UTC。
 
-### 线 B — VACE Phase 1A 数据（feat/phase1-v04-control-branch）
+## 摘要
 
-- B1 下载 80 条 Pexels raw videos — `8de58bb`。
-- B2 标准化 80 条候选背景 `[81,480,832,3]` — `4b234e7`。
-- B3 筛选 16 条 clean backgrounds（58/80 自动通过）— `fc39ad0`。
-- B4 生成 SI-A/B/C composites，12 个，0 audit failure — `b121c51`。
-  - train manifest 16 行（8 add + 8 remove）。
-  - eval manifest 8 行（4 add + 4 remove）。
-- B5 进行中：audit + `overfit_16.jsonl` + contact sheet。
+- v0.2/v7 executable planner: 最新 remove8 planner gate 是 1/8 ok，仍不能跑 full forward pass。
+- v8 planner-text experiment: `vlm_planner_lora_v8_20260604_v3` 在 seed_v3 eval 34 条上 34/34 JSON parse、33/34 schema/`if_removed` pass；valid fill types 为 `background_continuation` 27、`occlusion_reveal` 6，但不输出 executable quadmask grounding。
+- VACE Phase 1A control-branch 数据路线与 planner 训练路线独立，训练阶段不互相依赖。
 
-### 架构说明
-
-线 A 和线 B 完全独立，只在推理时汇合：
-
-```text
-用户指令 → planner → quadmask+VACE prompt → VACE → 编辑视频
-```
-
-训练阶段互不依赖。
+详细状态、证据路径和 next actions 见 `../STATUS.md`。
