@@ -348,9 +348,8 @@ def build_quadmask(masks: dict[int, np.ndarray], frame_count: int, height: int, 
             if mo.shape != (height, width):
                 mo = cv2.resize(mo.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST) > 0
         ma = affected_region_from_mask(mo)
-        quad[frame_idx][mo & ~ma] = 0
-        quad[frame_idx][mo & ma] = 63
-        quad[frame_idx][~mo & ma] = 127
+        quad[frame_idx][ma & ~mo] = 127
+        quad[frame_idx][mo] = 0
     generation_mask = np.full((frame_count, height, width), 255, dtype=np.uint8)
     return quad, generation_mask
 
@@ -430,7 +429,10 @@ def run_first_frame_edit(args: argparse.Namespace, anchor: Path, target_ref: str
     dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
     pipe = QwenImageEditPipeline.from_pretrained(str(args.qwen_image_edit_checkpoint), torch_dtype=dtype)
     if torch.cuda.is_available():
-        pipe = pipe.to("cuda")
+        if hasattr(pipe, "enable_model_cpu_offload"):
+            pipe.enable_model_cpu_offload()
+        else:
+            pipe = pipe.to("cuda")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     generator = torch.Generator(device=device).manual_seed(args.qwen_image_edit_seed)
     out_path = args.output_dir / f"edited_frame_{video_id}.jpg"
@@ -447,6 +449,8 @@ def run_first_frame_edit(args: argparse.Namespace, anchor: Path, target_ref: str
     if raw_size != image.size:
         result = result.resize(image.size, Image.Resampling.LANCZOS)
     result.save(out_path, quality=95)
+    with Image.open(out_path) as edited_image:
+        edited_size = list(edited_image.size)
     del pipe
     gc.collect()
     if torch.cuda.is_available():
@@ -460,7 +464,7 @@ def run_first_frame_edit(args: argparse.Namespace, anchor: Path, target_ref: str
         "true_cfg_scale": args.qwen_image_edit_true_cfg_scale,
         "source_size": list(image.size),
         "raw_output_size": list(raw_size),
-        "edited_size": list(Image.open(out_path).size),
+        "edited_size": edited_size,
         "target_mask_consumed_by_backend": False,
     }
 

@@ -1,19 +1,19 @@
 # E2W 当前状态
 
-最后更新：2026-06-09 UTC。
+最后更新：2026-06-09T12:12:06Z UTC。
 
 本文件是当前项目状态真源。`docs/STATUS.md` 只保留指向本文件的摘要；不要把历史 handoff、README 示例或旧 run 当作当前状态。
 
 ## 总结
 
-当前不是可以直接 full forward pass 的状态。
+当前已有一条 Counterfactual Planner -> grounding bridge -> current VACE runtime 的 remove-side INTERFACE smoke。仍不能声称 control / visual / research 成功。
 
 - 当前正确 planner 设计是 Counterfactual Planner；兼容 schema id 为 `e2w.planner_output.v8_tool_augmented_grounding.v1`。
 - Counterfactual Planner 目标是先生成 target-free counterfactual state，再由 grounding bridge 生成 `quadmask_npy` 并接入 current VACE runtime。
 - archived executable-planner routes 已退出当前主线，仓库内材料统一归档，只作为历史 artifact/reference，不再作为现状基准。
 - VACE Phase 1A control-branch 数据路线与 planner 训练路线独立，训练阶段不互相依赖。
 
-在 Counterfactual Planner -> grounding bridge -> current VACE runtime 的结构性对齐完成前，不要继续 package/report 或声称 full forward 成功。
+在 control / visual 验收完成前，不要继续 package/report 或声称模型已学会可控 counterfactual editing。
 
 ## 线 A - Planner 和 Grounding Bridge
 
@@ -59,16 +59,37 @@ original video + user remove request
 
 Evidence level: STRUCTURAL for planner text/schema compliance only.
 
-### 当前缺口
+### 当前 bridge / runtime 证据
 
-Counterfactual Planner 已完成一轮 code-side current runtime 对齐修正，但尚未完成 structural smoke 验收：
+Counterfactual Planner 已完成 remove-side 30 eval structural gate 和一条 VACE INTERFACE smoke：
 
-- grounding bridge 还没有被验收为 current spec 的结构性基准；
-- `target_ref -> quadmask_npy` 需要稳定审计；
-- `tools/run_counterfactual_planner_pipeline.py` 已改为生成 full-domain all-255 `generation_mask`，不再从 quadmask 派生局部 semantic mask；
-- VACE 层 metadata 已记录 E2W-level 六输入名称：`vace_conditioning_video`, `vace_prompt`, `quadmask_npy`, `generation_mask`, `operation`, `frame_num`；
-- backend adapter 的 `src_video` / `prompt` 名称只作为内部 adapter command 记录，不作为 current E2W runtime contract；
-- 还没有 Counterfactual Planner full bridge 的 30 eval / smoke structural gate。
+- structural gate: `/data/cwx/E2W/runs/counterfactual_bridge_skipvace_30_20260609T_run`
+  - 30/30 sampled eval rows status OK；
+  - planner JSON parse/schema OK；
+  - GroundingDINO bbox + SAM2 propagation OK；
+  - all `quadmask_npy` value sets were `[0,127,255]` with nonzero Q0 and Q2；
+  - `generation_mask` values `[255]`, `generation_mask_is_full_domain=true`；
+  - `vace_prompt_valid=true`；
+  - `source_video_passed_to_vace=false`；
+  - bbox confidence range: `0.3583865463733673` to `0.9003759026527405`。
+- VACE INTERFACE smoke: `/data/cwx/E2W/runs/counterfactual_bridge_vace_interface_1_gpu2_20260609T_run`
+  - sample `4fe6619a47`, target_ref `a bathroom sink`；
+  - first-frame edit OK；
+  - VACE backend returncode `0`；
+  - output video: `/data/cwx/E2W/runs/counterfactual_bridge_vace_interface_1_gpu2_20260609T_run/edited_video_4fe6619a47.mp4`；
+  - VACE runtime inputs recorded with current E2W names: `vace_conditioning_video`, `quadmask_npy`, `generation_mask`, `operation`, `vace_prompt`, `frame_num`。
+
+Evidence level:
+
+- bridge: STRUCTURAL on 30 eval samples；
+- remove full path: INTERFACE on 1 sample；
+- visual quality, operation control, quadmask control, and learned VACE semantics: not established。
+
+Code-side fixes made during this gate:
+
+- `tools/run_counterfactual_planner_pipeline.py` preserves SAM2 primary as Q0 instead of collapsing all primary pixels into Q1；
+- first-frame Qwen Image Edit uses model CPU offload when available to avoid single-GPU OOM；
+- regression coverage added in `tests/test_counterfactual_planner_bridge.py`。
 
 ## Archived Planner References
 
@@ -160,7 +181,7 @@ Code-side follow-up on 2026-06-09:
 
 ## 当前阻塞点
 
-主 blocker 是 Counterfactual Planner 已经成为正确 planner design，grounding bridge / runtime adapter 已做 code-side current-spec 修正，但尚未通过 structural smoke 验收。
+主 blocker 已从 bridge structural alignment 前移到 control / visual / training evidence：当前只有 remove-side STRUCTURAL + one-sample INTERFACE，不证明 learned control。
 
 当前不要从 archived executable-planner checkpoint 继续跑 full forward pass。
 
@@ -171,11 +192,13 @@ Code-side follow-up on 2026-06-09:
   - metadata 使用 E2W-level 六输入命名；
   - backend `src_video`/`prompt` 只作为 adapter 内部名；
   - 记录 planner JSON -> grounding -> quadmask -> vace_prompt -> VACE inputs 的证据链。
-- [ ] 2. 对 Counterfactual Planner eval 做小规模 bridge smoke，先 `--skip-vace` 验证 STRUCTURAL：
+- [x] 2. 对 Counterfactual Planner eval 做小规模 bridge smoke，先 `--skip-vace` 验证 STRUCTURAL：
   - planner JSON parse/schema；
   - target_ref grounding 成功；
   - quadmask shape/value；
   - full-domain generation_mask；
   - vace_prompt target-free。
-- [ ] 3. 通过 structural gate 后，再跑一条 VACE INTERFACE smoke。
-- [ ] 4. 只有 Counterfactual Planner bridge structural gate 通过后，才进入 package/report/freshness audit。
+- [x] 3. 通过 structural gate 后，再跑一条 VACE INTERFACE smoke。
+- [x] 4. 扩大到 30 eval structural gate，确认 bridge 稳定性。
+- [ ] 5. 设计并运行 operation swap / Q0-Q2 perturb / Q3 preservation CONTROL 验收。
+- [ ] 6. 人工或模型评审 remove + add 输出，达到 VISUAL 证据后再 package/report。

@@ -2,7 +2,7 @@
 
 > **Owner / update convention:** This file is the assistant-maintained continuity ledger for E2W. The user asked that Hermes maintains it. Treat it as a project state ledger, not a scratchpad. Update it only when a durable fact, boundary decision, verified artifact, or next-step priority changes. Do not use it for transient task notes.
 
-Last updated: 2026-06-09T10:45:58Z
+Last updated: 2026-06-09T13:30:00Z
 Maintainer skill: `e2w-project-ledger`
 Canonical repo: `ssh cwx:/home/cwx/E2W`
 Current spec: `/home/cwx/E2W/docs/E2W_SPEC.md`
@@ -119,13 +119,13 @@ Do not answer current project status purely from memory.
 
 ## 4. Current Repository Snapshot
 
-Verified at: 2026-06-08T16:10:14Z before the spec cleanup commit.
+Verified at: 2026-06-09T13:30:00Z after bridge structural gate and code-side contract fixes.
 
 ```text
 repo: /home/cwx/E2W on ssh cwx
 branch: main
-status before cleanup: main...origin/main [ahead 6]
-head before cleanup: 918ca7c A13 加入 first frame edit，完善端到端 pipeline
+head: d4dc4c6 修正v03生成掩码默认模式
+tests: 17 tests OK
 ```
 
 ---
@@ -139,12 +139,15 @@ Current understanding:
 - Counterfactual Planner is the current correct planner design.
 - Its compatible schema id is `e2w.planner_output.v8_tool_augmented_grounding.v1`; keep this string for artifact compatibility only.
 - Counterfactual Planner is strong on parse/schema/target-free counterfactual text and should be the basis for current planner work.
-- The Counterfactual Planner grounding bridge and runtime adapter have code-side current-spec fixes for full-domain generation masks, E2W-level VACE input metadata, and adapter-name separation. The remaining main gap is structural smoke verification of that bridge.
+- The Counterfactual Planner grounding bridge and runtime adapter have current-spec fixes for full-domain generation masks, E2W-level VACE input metadata, and adapter-name separation.
+- Remove-side bridge STRUCTURAL gate passed on 30 sampled eval rows at `/data/cwx/E2W/runs/counterfactual_bridge_skipvace_30_20260609T_run`: planner parse/schema OK, GroundingDINO/SAM2 OK, all `quadmask_npy` value sets `[0,127,255]` with nonzero Q0/Q2, `generation_mask` values `[255]`, `vace_prompt_valid=true`, and `source_video_passed_to_vace=false`.
+- One remove-side current-spec VACE INTERFACE smoke passed at `/data/cwx/E2W/runs/counterfactual_bridge_vace_interface_1_gpu2_20260609T_run` for sample `4fe6619a47`: first-frame edit OK, VACE backend returncode `0`, and output `/data/cwx/E2W/runs/counterfactual_bridge_vace_interface_1_gpu2_20260609T_run/edited_video_4fe6619a47.mp4` exists.
+- Code-side bridge fix: `tools/run_counterfactual_planner_pipeline.py` now preserves SAM2 primary pixels as Q0 instead of collapsing them into Q1; Qwen Image Edit first-frame edit uses model CPU offload when available.
 - Archived executable-planner materials are archived historical evidence.
 
 Do not claim:
 
-- Counterfactual Planner can run full forward pass cleanly until the grounding bridge and current VACE runtime mapping are structurally verified;
+- Counterfactual Planner has CONTROL, VISUAL, or RESEARCH success from the current bridge/interface smoke;
 - target-free text success alone implies renderer/control success;
 - an archived executable-planner route is the current planner baseline.
 
@@ -235,20 +238,29 @@ Interface success alone must never be reported as visual/control/research succes
 
 ## 7. Minimal Viable Next Proof
 
-The next meaningful E2W proof should be small and controlled:
+The bridge structural spine is now proven:
 
 ```text
-Use Counterfactual Planner outputs.
-Verify the grounding bridge and current runtime mapping:
-  - planner JSON parse/schema passes;
-  - target_ref grounds to usable masks;
-  - quadmask_npy has exact values and shape;
-  - generation_mask is full-domain all-255;
-  - vace_prompt is target-free and produced from Counterfactual Planner state;
-  - metadata links planner JSON -> grounding -> quadmask -> VACE inputs.
+Completed (2026-06-09):
+  - planner JSON parse/schema: 30/30 eval rows OK
+  - target_ref -> GroundingDINO/SAM2 grounding: OK
+  - quadmask_npy values [0,127,255], nonzero Q0/Q2: OK
+  - generation_mask full-domain all-255: OK
+  - vace_prompt target-free and planner-produced: OK
+  - metadata links planner JSON -> grounding -> quadmask -> VACE inputs: OK
+  - remove-side VACE INTERFACE smoke: 1 sample, returncode 0
 ```
 
-The code-side bridge mapping now targets these bullets, but the proof still requires a fresh structural smoke run. Avoid long full-pipeline runs until this Counterfactual Planner structural spine is proven.
+The next meaningful E2W proof is CONTROL evidence:
+
+```text
+Design and run operation swap + quadmask perturbation tests:
+  - swap operation add <-> remove on same clip, same quadmask: outputs must differ;
+  - zero out Q0/Q2 region (all-255 quadmask): object should not be removed;
+  - swap Q0 location to a non-target region: edit region should shift;
+  - Q3 pixels in reference frame should be preserved across the edit.
+Only after CONTROL evidence passes is VISUAL review meaningful.
+```
 
 ---
 
