@@ -1,6 +1,39 @@
-# E2W: Edit2World Counterfactual Video Editing
+# Edit2World (E2W)
 
-E2W studies **counterfactual video editing with an explicit intervention contract**:
+E2W is a research prototype for **counterfactual video editing under an explicit intervention contract**.
+
+Given an observed video and a user intervention such as "remove the object" or "add a mug", E2W separates the problem into explicit pieces:
+
+```text
+user intervention
+→ planner/model output
+→ counterfactual first frame
+→ causal-region quadmask
+→ operation-conditioned video renderer
+→ edited video
+```
+
+The project goal is not just to make an edited clip. The research question is whether making the intervention contract explicit — semantic state, causal regions, operation, and renderer conditioning — can support more testable counterfactual video editing than treating the task as ordinary video editing or pure text-to-video generation.
+
+E2W does **not** currently claim that the system has learned a physical world model. Every result should be reported with the evidence level it actually supports.
+
+## What to Read
+
+For a quick human orientation, start here. For operational details, use the canonical docs:
+
+| File | Audience | Purpose |
+|---|---|---|
+| `README.md` | humans | project overview, mental model, current state |
+| `docs/E2W_SPEC.md` | humans + agents | single current runtime contract |
+| `STATUS.md` | humans + agents | current operational status and blockers |
+| `docs/E2W_PROJECT_LEDGER.md` | humans + agents | durable project decisions and evidence ledger |
+| `AGENTS.md` | agents | rules for coding/research agents working in this repo |
+
+Historical specs, handoffs, and old runbooks live under `docs/archive/`. They are useful for archaeology, but not current constraints.
+
+## Core Idea
+
+E2W represents an edit as an intervention contract:
 
 ```text
 semantic intervention
@@ -11,65 +44,32 @@ semantic intervention
 = counterfactual edited video
 ```
 
-E2W is **not** a generic video editing benchmark, not pure text-to-video generation, and not a claim that the current system already learned a physical world model.
+This means the video renderer should not receive the original video as a hidden source condition. The renderer gets a counterfactual conditioning video plus structured controls. The original video can still be used upstream for planner context, provenance, and audit.
 
-## Read First
+## Runtime Contract in One Screen
 
-These files are the current source of truth:
-
-```text
-docs/E2W_SPEC.md              # single current runtime contract
-STATUS.md                     # current operational status
-docs/E2W_PROJECT_LEDGER.md    # durable project ledger / continuity notes
-AGENTS.md                     # agent operating manual
-```
-
-Historical specs, handoffs, and old runbooks live under `docs/archive/` and are reference-only. If an archived file or an old README-era command disagrees with `docs/E2W_SPEC.md`, the current spec wins.
-
-Canonical locations on `cwx`:
+The current VACE runtime input contract is:
 
 ```text
-repo:      /home/cwx/E2W
-artifacts: /data/cwx/E2W
-python:    /data/cwx/conda/envs/edit2world-phase1-real/bin/python
+vace_conditioning_video   # first-frame-edited conditioning video
+quadmask_npy              # semantic region contract, uint8 [T,H,W]
+generation_mask           # full-domain all-generate mask, non-semantic
+operation                 # remove | add
+vace_prompt               # produced by actual upstream planner/model inference
+frame_num                 # VACE temporal length
 ```
 
-## Current Runtime Contract
-
-The VACE runtime receives exactly these E2W-controlled inputs:
+The important boundary:
 
 ```text
-vace_conditioning_video
-quadmask_npy
-generation_mask
-operation
-vace_prompt
-frame_num
+original/source/factual video is not a VACE runtime input
 ```
 
-Do **not** introduce parallel runtime contracts in new code, docs, or reports.
+See `docs/E2W_SPEC.md` for the precise rules.
 
-Important rules:
+## Quadmask
 
-- `vace_conditioning_video` is the only visual condition passed to VACE.
-- `vace_conditioning_video` is a first-frame-edited conditioning video, not the original observed video.
-- No `src_video`, `source_video`, `original_video`, or `factual_source_video` field is part of the E2W VACE runtime contract.
-- `quadmask_npy` is the semantic E2W control mask.
-- `generation_mask` is full-domain all-generate for normal E2W runs and carries no E2W semantic meaning.
-- `operation` is explicit: `remove` or `add`.
-- `vace_prompt` must come from the actual upstream planner/model inference path for the run; runners must not hard-code, rewrite, or teacher/manual-substitute it.
-
-See `docs/E2W_SPEC.md` for the full contract.
-
-## Quadmask Semantics
-
-`quadmask_npy` is authoritative:
-
-```text
-dtype: uint8
-shape: [T, H, W]
-allowed values: {0, 63, 127, 255}
-```
+`quadmask_npy` is the semantic mask. It is authoritative; previews are not.
 
 | value | region | meaning |
 |---:|---|---|
@@ -78,31 +78,16 @@ allowed values: {0, 63, 127, 255}
 | `127` | Q2 | affected non-target region |
 | `255` | Q3 | keep region |
 
-Preview images/videos are not authoritative because compression can perturb exact values.
+`generation_mask` is different: in current E2W runtime it is normally full-domain all `255` and carries no semantic edit meaning.
 
-## Evidence Ladder
+## Current State
 
-Every result must be described with an evidence level:
+See `STATUS.md` for the latest details. Short version:
 
-```text
-INTERFACE  = files/commands/metadata exist and run
-STRUCTURAL = shapes/values/paths prove signals enter the intended model path
-TRAINING   = loss/gate/gradient evidence from a real training run
-CONTROL    = perturbation or swap proves response to operation/quadmask
-VISUAL     = review confirms the edited video satisfies target criteria
-RESEARCH   = ablation-backed evidence supports a paper-level claim
-```
-
-Do not upgrade claims without matching evidence. In particular, `edited_video.mp4` existence is INTERFACE, not visual success.
-
-## Current Status Snapshot
-
-For current details, read `STATUS.md`. At a high level:
-
-- v0.2/v7 executable planner route: remove8 gate still fails strict downstream requirements.
-- v8 planner-text route: strong target-free text/schema results, but it does not output executable quadmask grounding.
-- VACE Phase 1A control-branch work is separate from planner training and still needs corrected real 14B reruns plus control/visual validation.
-- Add pipeline has a current-spec INTERFACE smoke success, not visual/control/research success.
+- The strict executable planner path for remove is still not fully through downstream gates.
+- The v8 planner-text experiments are much better at structured text, but do not yet provide executable quadmask grounding.
+- The VACE control-branch training path is separate and still needs corrected real training plus control/visual validation.
+- The add pipeline now has an **INTERFACE-level** smoke success.
 
 Verified add INTERFACE run:
 
@@ -110,26 +95,40 @@ Verified add INTERFACE run:
 /data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z
 ```
 
-That run used real planner/model inference for `vace_prompt`, Qwen Edit for `edited_first_frame`, SAM2 on `edited_first_frame` for add quadmask, full-domain all-255 `generation_mask`, and VACE to produce `edited_video.mp4`. It does **not** prove visual quality, learned planner add quality, or learned VACE add semantics.
+What that run proves:
 
-## Useful Commands
+- original video + user prompt reached actual planner/model inference;
+- `vace_prompt` came from the planner/model and was passed through unchanged;
+- Qwen Edit produced an edited first frame;
+- SAM2 produced an add quadmask from the edited first frame;
+- `quadmask.npy` and full-domain `generation_mask` had correct shape/value contracts;
+- VACE produced a non-empty `edited_video.mp4`.
 
-Check repository state:
+What it does **not** prove:
 
-```bash
-cd /home/cwx/E2W
-git status --short --branch
-git log -5 --oneline
+- visual quality;
+- learned planner add quality;
+- learned VACE add semantics;
+- physical correctness.
+
+## Evidence Levels
+
+Use these labels when discussing results:
+
+```text
+INTERFACE  = files/commands/metadata exist and run
+STRUCTURAL = shapes/values/paths prove signals enter the intended path
+TRAINING   = loss/gate/gradient evidence from a real training run
+CONTROL    = perturbation or swap shows response to operation/quadmask
+VISUAL     = review confirms the edited video satisfies target criteria
+RESEARCH   = ablation-backed evidence supports a paper-level claim
 ```
 
-Run the add INTERFACE unit tests:
+A generated `edited_video.mp4` is INTERFACE evidence unless separately reviewed or tested.
 
-```bash
-cd /home/cwx/E2W
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests.test_add_pipeline_interface
-```
+## Running the Current Add Interface Smoke
 
-Run the add INTERFACE smoke when a suitable GPU is free:
+Use this only as an interface check, not as a visual-quality benchmark.
 
 ```bash
 cd /home/cwx/E2W
@@ -142,25 +141,23 @@ CUDA_VISIBLE_DEVICES=<gpu> PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   --vace-sample-steps 2
 ```
 
-The add runner is an INTERFACE smoke runner. It must not be used to claim visual success without separate review.
-
-## Current Do-Not-Do List
-
-- Do not pass original/source/factual video to VACE as a runtime input.
-- Do not use `src_video` as a current E2W runtime field name; it may appear only as a legacy backend adapter argument when explicitly documented.
-- Do not use `generation_mask` to encode Q0/Q1/Q2/Q3 semantics.
-- Do not silently rewrite invalid planner outputs.
-- Do not use teacher/manual `vace_prompt` for current pipeline acceptance runs.
-- Do not report interface success as visual/control/research success.
-- Do not revive archived docs as current constraints.
-
-## Worktree / Branch Hygiene
-
-Use feature worktrees for isolated development, then merge via PR into `main`. After merge, remove the feature worktree/branch unless it remains active.
-
-Current local-only worktrees may exist for unfinished research branches; check them before assuming all work is on GitHub:
+Unit test:
 
 ```bash
-git worktree list --porcelain
-git branch -vv --all
+cd /home/cwx/E2W
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests.test_add_pipeline_interface
 ```
+
+Project locations on `cwx`:
+
+```text
+repo:      /home/cwx/E2W
+artifacts: /data/cwx/E2W
+python:    /data/cwx/conda/envs/edit2world-phase1-real/bin/python
+```
+
+## For Contributors
+
+Before changing runtime contracts, read `docs/E2W_SPEC.md`. Before making claims about progress, read `STATUS.md` and `docs/E2W_PROJECT_LEDGER.md`.
+
+For agents and automation, follow `AGENTS.md`. The README is intentionally a human-facing overview; detailed operating rules live in the spec, status, ledger, and agent manual.
