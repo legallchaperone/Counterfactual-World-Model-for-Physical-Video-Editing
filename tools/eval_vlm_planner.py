@@ -33,6 +33,7 @@ from e2w_v0_common import (  # noqa: E402
     link_or_copy,
     load_jsonl,
     normalize_to_e2w_contract,
+    parse_add_planner_json,
     parse_json_output,
     resolve_expected_operation_with_source,
     serialize_vace_prompt,
@@ -186,10 +187,18 @@ def process_sample(args: argparse.Namespace, processor: Any, model: Any, sample:
 
     meta = video_meta(Path(sample["video"]))
     raw_json, parse_error = parse_json_output(raw_text)
+    add_contract_parse_fallback_used = False
+    if raw_json is None and args.operation == "add":
+        raw_json_add, parse_error_add = parse_add_planner_json(raw_text)
+        if raw_json_add is not None:
+            raw_json = raw_json_add
+            parse_error = None
+            add_contract_parse_fallback_used = True
     metrics: dict[str, Any] = {
         "sample_id": sample_id,
         "json_parse_ok": raw_json is not None,
         "parse_error": parse_error,
+        "add_contract_parse_fallback_used": add_contract_parse_fallback_used,
         "generation_runtime_sec": runtime,
         "video": meta,
     }

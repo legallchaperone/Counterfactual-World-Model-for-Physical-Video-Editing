@@ -465,6 +465,24 @@ def extract_json_text(text: str) -> tuple[str | None, str | None]:
     return json.dumps(obj, ensure_ascii=False), None
 
 
+def parse_add_planner_json(text: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Lenient parser for the current add planner contract (vace_prompt + target_ref).
+
+    Bypasses the v6 schema key check. Used as fallback in eval_vlm_planner when
+    the model produces new-contract add output that lacks v6 fields.
+    """
+    cleaned = _strip_json_fence(text)
+    try:
+        obj = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        return None, f"json decode error: {exc}"
+    if not isinstance(obj, dict):
+        return None, "planner output must be a top-level JSON object"
+    if not str(obj.get("vace_prompt") or "").strip():
+        return None, "add planner JSON missing required field: vace_prompt"
+    return obj, None
+
+
 def parse_json_output(text: str) -> tuple[dict[str, Any] | None, str | None]:
     json_text, error = extract_json_text(text)
     if json_text is None:
