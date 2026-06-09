@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Debug v8 planner -> GroundingDINO -> SAM2 propagation on eval samples."""
+"""Debug Counterfactual Planner -> GroundingDINO -> SAM2 propagation on eval samples."""
 
 from __future__ import annotations
 
@@ -27,13 +27,13 @@ from qwen_vl_utils import process_vision_info
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from e2w_v0_common import serialize_vace_prompt, validate_planner_output_v8  # noqa: E402
+from e2w_v0_common import serialize_vace_prompt, validate_counterfactual_planner_output  # noqa: E402
 
 
-DEFAULT_EVAL = Path("/data/cwx/E2W/data/planner_sft_v8/eval.jsonl")
+DEFAULT_EVAL = Path("/data/cwx/E2W/data/counterfactual_planner_sft/eval.jsonl")
 DEFAULT_BASE_MODEL = Path("/data/cwx/Edit2World-unified/checkpoints/Qwen2.5-VL-7B-Instruct")
 DEFAULT_ADAPTER = Path("/data/cwx/E2W/checkpoints/vlm_planner_lora_v8_20260604_v3")
-DEFAULT_OUT_DIR = Path("/data/cwx/E2W/runs/e2w_v8_pipeline_debug")
+DEFAULT_OUT_DIR = Path("/data/cwx/E2W/runs/e2w_counterfactual_planner_pipeline_debug")
 DEFAULT_DINO_CKPT = Path("/data/cwx/edit2world-models/phase1/groundingdino_swint_ogc.pth")
 DEFAULT_SAM2_REPO = Path("/data/cwx/Edit2World-unified/external/sam2")
 DEFAULT_SAM2_CKPT = Path("/data/cwx/Edit2World-unified/checkpoints/sam2/sam2.1_hiera_large.pt")
@@ -189,7 +189,7 @@ def run_planner(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[di
         schema_valid = False
         validation_error = parse_error
         if parsed is not None:
-            schema_valid, validation_error = validate_planner_output_v8(parsed, source_video_id=str(row.get("video_id") or "unknown"))
+            schema_valid, validation_error = validate_counterfactual_planner_output(parsed, source_video_id=str(row.get("video_id") or "unknown"))
         target_ref = str(parsed.get("target_ref") or "").strip() if parsed else ""
         planned.append(
             {

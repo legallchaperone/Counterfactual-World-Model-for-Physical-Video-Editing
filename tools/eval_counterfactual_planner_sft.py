@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run v8 planner LoRA inference and validate eval JSON outputs."""
+"""Run Counterfactual Planner LoRA inference and validate eval JSON outputs."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from qwen_vl_utils import process_vision_info
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from e2w_v0_common import validate_planner_output_v8  # noqa: E402
+from e2w_v0_common import validate_counterfactual_planner_output  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -110,7 +110,7 @@ def main() -> int:
         valid = False
         validation_error = parse_error
         if obj is not None:
-            valid, validation_error = validate_planner_output_v8(obj, source_video_id=str(row.get("video_id") or "unknown"))
+            valid, validation_error = validate_counterfactual_planner_output(obj, source_video_id=str(row.get("video_id") or "unknown"))
         out = {
             "index": i - 1,
             "source": row.get("source"),

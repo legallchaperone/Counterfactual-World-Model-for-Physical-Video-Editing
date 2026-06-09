@@ -24,21 +24,21 @@ DEFAULT_TEACHER_DIR = Path("/data/cwx/E2W/data/physics_iq_vlm_sft/teacher_labels
 PLANNER_IO_SCHEMA_VERSION = "e2w.planner_io.v6_executable.v1"
 EDIT_PLAN_SCHEMA_VERSION = "e2w.edit_plan.v1"
 QUADMASK_SPEC_SCHEMA_VERSION = "e2w.quadmask_spec.v1"
-PLANNER_OUTPUT_SCHEMA_V8_VERSION = "e2w.planner_output.v8_tool_augmented_grounding.v1"
-PLANNER_V8_FILL_TYPES = {
+COUNTERFACTUAL_PLANNER_SCHEMA_VERSION = "e2w.planner_output.v8_tool_augmented_grounding.v1"
+COUNTERFACTUAL_PLANNER_FILL_TYPES = {
     "background_continuation",
     "occlusion_reveal",
     "contact_transition",
     "fluid_deformation",
     "object_absence",
 }
-PLANNER_V8_COUNTERFACTUAL_TEXT_FIELDS = ("surface", "lighting", "shadow", "temporal", "interaction", "geometry")
-PLANNER_V8_COUNTERFACTUAL_STATE_FIELDS = ("fill_type", *PLANNER_V8_COUNTERFACTUAL_TEXT_FIELDS)
-PLANNER_OUTPUT_SCHEMA_V8: dict[str, Any] = {
+COUNTERFACTUAL_PLANNER_TEXT_FIELDS = ("surface", "lighting", "shadow", "temporal", "interaction", "geometry")
+COUNTERFACTUAL_PLANNER_STATE_FIELDS = ("fill_type", *COUNTERFACTUAL_PLANNER_TEXT_FIELDS)
+COUNTERFACTUAL_PLANNER_SCHEMA: dict[str, Any] = {
     "target_ref": str,
     "edit_type": "remove",
     "counterfactual_state": {
-        "fill_type": sorted(PLANNER_V8_FILL_TYPES),
+        "fill_type": sorted(COUNTERFACTUAL_PLANNER_FILL_TYPES),
         "surface": str,
         "lighting": str,
         "shadow": str,
@@ -339,13 +339,13 @@ def planner_schema_prompt_text(operation: str = "remove") -> str:
     return json.dumps(planner_schema_template(operation), ensure_ascii=False)
 
 
-def planner_output_schema_v8_prompt_text() -> str:
+def counterfactual_planner_schema_prompt_text() -> str:
     return json.dumps(
         {
             "target_ref": "short visible reference to the edit target",
             "edit_type": "remove",
             "counterfactual_state": {
-                "fill_type": sorted(PLANNER_V8_FILL_TYPES),
+                "fill_type": sorted(COUNTERFACTUAL_PLANNER_FILL_TYPES),
                 "surface": "1-2 target-free sentences about material and texture filling the edited region.",
                 "lighting": "1-2 target-free sentences about lighting and highlight changes.",
                 "shadow": "1-2 target-free sentences about shadow and reflection changes.",
@@ -359,7 +359,7 @@ def planner_output_schema_v8_prompt_text() -> str:
     )
 
 
-def build_planner_user_prompt_v8(
+def build_counterfactual_planner_user_prompt(
     video_id: str,
     user_request: str,
     extra_rules: str | None = None,
@@ -380,12 +380,12 @@ def build_planner_user_prompt_v8(
     if extra_rules:
         rules.append(extra_rules.strip())
     return (
-        "You are the Edit2World SFT VLM planner. Given the image and user request, "
-        "return only valid JSON for the v8 tool-augmented planner schema.\n\n"
-        f"Schema version: {PLANNER_OUTPUT_SCHEMA_V8_VERSION}\n"
+        "You are the Edit2World Counterfactual Planner. Given the image and user request, "
+        "return only valid JSON for the Counterfactual Planner schema.\n\n"
+        f"Schema version: {COUNTERFACTUAL_PLANNER_SCHEMA_VERSION}\n"
         "Task operation: remove\n"
         "\nThe JSON must match this planner schema:\n"
-        + planner_output_schema_v8_prompt_text()
+        + counterfactual_planner_schema_prompt_text()
         + "\n\n"
         "Current task:\n"
         f"Set the implicit source video_id to {video_id}. Do not include video_id in the JSON.\n"
@@ -1141,9 +1141,9 @@ def summarize_boolean_metrics(rows: list[dict[str, Any]], keys: list[str]) -> di
     return out
 
 
-def _planner_v8_edit_plan(obj: dict[str, Any], *, source_video_id: str = "unknown") -> dict[str, Any]:
+def _counterfactual_planner_edit_plan(obj: dict[str, Any], *, source_video_id: str = "unknown") -> dict[str, Any]:
     state = obj.get("counterfactual_state") if isinstance(obj.get("counterfactual_state"), dict) else {}
-    state_values = [str(state.get(k) or "").strip() for k in PLANNER_V8_COUNTERFACTUAL_TEXT_FIELDS if str(state.get(k) or "").strip()]
+    state_values = [str(state.get(k) or "").strip() for k in COUNTERFACTUAL_PLANNER_TEXT_FIELDS if str(state.get(k) or "").strip()]
     target_ref = str(obj.get("target_ref") or "").strip()
     instruction = f"remove {target_ref}" if target_ref else "remove the target object"
     return {
@@ -1163,9 +1163,9 @@ def _planner_v8_edit_plan(obj: dict[str, Any], *, source_video_id: str = "unknow
     }
 
 
-def validate_planner_output_v8(obj: Any, *, source_video_id: str = "unknown") -> tuple[bool, str | None]:
+def validate_counterfactual_planner_output(obj: Any, *, source_video_id: str = "unknown") -> tuple[bool, str | None]:
     if not isinstance(obj, dict):
-        return False, "planner v8 output must be a top-level JSON object"
+        return False, "Counterfactual Planner output must be a top-level JSON object"
     target_ref = str(obj.get("target_ref") or "").strip()
     if not target_ref:
         return False, "target_ref must be non-empty"
@@ -1175,15 +1175,15 @@ def validate_planner_output_v8(obj: Any, *, source_video_id: str = "unknown") ->
     if not isinstance(state, dict):
         return False, "counterfactual_state must be an object"
     fill_type = str(state.get("fill_type") or "").strip()
-    if fill_type not in PLANNER_V8_FILL_TYPES:
-        return False, f"fill_type must be one of {sorted(PLANNER_V8_FILL_TYPES)}"
-    missing = [key for key in PLANNER_V8_COUNTERFACTUAL_STATE_FIELDS if not str(state.get(key) or "").strip()]
+    if fill_type not in COUNTERFACTUAL_PLANNER_FILL_TYPES:
+        return False, f"fill_type must be one of {sorted(COUNTERFACTUAL_PLANNER_FILL_TYPES)}"
+    missing = [key for key in COUNTERFACTUAL_PLANNER_STATE_FIELDS if not str(state.get(key) or "").strip()]
     if missing:
         return False, f"counterfactual_state fields must be non-empty: {', '.join(missing)}"
     if not str(obj.get("if_removed") or "").strip():
         return False, "if_removed must be non-empty"
     try:
-        serialize_vace_prompt(_planner_v8_edit_plan(obj, source_video_id=source_video_id))
+        serialize_vace_prompt(_counterfactual_planner_edit_plan(obj, source_video_id=source_video_id))
     except VacePromptContractError as exc:
         return False, str(exc)
     return True, None

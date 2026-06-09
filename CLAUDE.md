@@ -50,8 +50,7 @@ Use the Python environment:
 For code or pipeline-contract changes, run relevant static tests:
 
 ```bash
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests/test_v02_contracts.py
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests/test_v03_quad_vace_contracts.py
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest discover -s tests -p 'test*.py'
 ```
 
 For doc-only changes, verify references and `git diff`; tests are not required unless executable contracts changed.

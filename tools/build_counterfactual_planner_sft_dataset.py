@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build Qwen2.5-VL SFT data for v8 tool-augmented E2W planner.
+"""Build Qwen2.5-VL SFT data for the E2W Counterfactual Planner.
 
 Input rows come from Line C annotations with grounded targets and v2 7-field
-counterfactual_state. The v8 planner target no longer emits bbox/mask fields;
-it emits only target_ref, edit_type=remove, counterfactual_state, and if_removed.
+counterfactual_state. The Counterfactual Planner target does not emit bbox/mask
+fields; it emits only target_ref, edit_type=remove, counterfactual_state, and if_removed.
 """
 
 from __future__ import annotations
@@ -17,13 +17,13 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from e2w_v0_common import build_planner_user_prompt_v8, validate_planner_output_v8  # noqa: E402
+from e2w_v0_common import build_counterfactual_planner_user_prompt, validate_counterfactual_planner_output  # noqa: E402
 
 DEFAULT_INPUT = Path("/data/cwx/E2W/data/line_c_annotations/seed_150_v2.jsonl")
-DEFAULT_OUTPUT_DIR = Path("/data/cwx/E2W/data/planner_sft_v8")
+DEFAULT_OUTPUT_DIR = Path("/data/cwx/E2W/data/counterfactual_planner_sft")
 DAVIS_FRAME_ROOT = Path("/data/cwx/E2W/data/raw_datasets/DAVIS/DAVIS/JPEGImages/480p")
 RYVOS_FRAME_ROOT = Path("/data/cwx/E2W/data/raw_datasets/refer-youtube-vos/rvos/valid/JPEGImages")
-PLANNER_V8_KEYS = ("target_ref", "edit_type", "counterfactual_state", "if_removed")
+COUNTERFACTUAL_PLANNER_KEYS = ("target_ref", "edit_type", "counterfactual_state", "if_removed")
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,7 +80,7 @@ def anchor_frame_path(row: dict[str, Any], source: str) -> Path:
 
 
 def planner_output(row: dict[str, Any]) -> dict[str, Any]:
-    obj = {key: row.get(key) for key in PLANNER_V8_KEYS}
+    obj = {key: row.get(key) for key in COUNTERFACTUAL_PLANNER_KEYS}
     obj["edit_type"] = "remove"
     return obj
 
@@ -91,11 +91,11 @@ def convert_row(row: dict[str, Any]) -> dict[str, Any]:
     if not image_path.exists():
         raise FileNotFoundError(f"Missing anchor frame for {source}/{row.get('video_id')}: {image_path}")
     assistant_obj = planner_output(row)
-    ok, err = validate_planner_output_v8(assistant_obj, source_video_id=str(row.get("video_id") or "unknown"))
+    ok, err = validate_counterfactual_planner_output(assistant_obj, source_video_id=str(row.get("video_id") or "unknown"))
     if not ok:
-        raise ValueError(f"Invalid planner v8 output for {source}/{row.get('video_id')}: {err}")
+        raise ValueError(f"Invalid Counterfactual Planner output for {source}/{row.get('video_id')}: {err}")
     instruction = str(row.get("instruction") or f"remove {row.get('target_ref')}").strip()
-    prompt = build_planner_user_prompt_v8(str(row.get("video_id") or ""), instruction)
+    prompt = build_counterfactual_planner_user_prompt(str(row.get("video_id") or ""), instruction)
     return {
         "id": f"{source}:{row.get('video_id')}",
         "messages": [
@@ -143,7 +143,7 @@ def validate_dataset(rows: list[dict[str, Any]]) -> None:
         if not image_path.exists():
             raise FileNotFoundError(image_path)
         obj = json.loads(assistant["content"])
-        ok, err = validate_planner_output_v8(obj, source_video_id=row.get("video_id", "unknown"))
+        ok, err = validate_counterfactual_planner_output(obj, source_video_id=row.get("video_id", "unknown"))
         if not ok:
             raise ValueError(f"Invalid assistant JSON for {row.get('source')}/{row.get('video_id')}: {err}")
 

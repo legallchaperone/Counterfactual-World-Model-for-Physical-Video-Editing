@@ -165,9 +165,10 @@ def run_planner(args: argparse.Namespace, run_dir: Path) -> tuple[dict[str, Any]
                     and metrics.get("vace_prompt_contract_ok")
                     and metrics.get("primary_point_valid")
                 )
-                # Existing v6 executor marks missing bbox as non-executable, but the add
-                # interface mask path can prompt SAM2 with a planner/model point on the
-                # edited_first_frame. Accept that real model output without manual repair.
+                # The archived executable-planner validator marks missing bbox as
+                # non-executable, but the add interface mask path can prompt SAM2 with
+                # a planner/model point on the edited_first_frame. Accept that real
+                # model output without manual repair.
                 if last_entry.get("status") == "ok" or planner_usable_for_add_interface:
                     last_entry.setdefault("metrics", {})["accepted_for_add_interface"] = True
                     last_entry["status"] = "ok" if last_entry.get("status") == "ok" else "accepted_point_only_for_add_interface"

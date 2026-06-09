@@ -8,10 +8,10 @@
 
 ## 摘要
 
-- v8 planner 是当前正确设计：`e2w.planner_output.v8_tool_augmented_grounding.v1`。
-- v8 seed_v3 eval：34/34 JSON parse、33/34 schema/`if_removed` pass；valid fill types 为 `background_continuation` 27、`occlusion_reveal` 6。
-- 当前 blocker 是 v8 grounding bridge / runtime adapter 尚未按 current spec 完成结构性对齐。
-- v6/v7/v0.2 executable-planner artifacts 已归档为历史参考，不再作为 current planner baseline。
+- Counterfactual Planner 是当前正确设计；兼容 schema id 为 `e2w.planner_output.v8_tool_augmented_grounding.v1`。
+- Counterfactual Planner seed_v3 eval：34/34 JSON parse、33/34 schema/`if_removed` pass；valid fill types 为 `background_continuation` 27、`occlusion_reveal` 6。
+- 当前 blocker 是 Counterfactual Planner grounding bridge / runtime adapter 尚未按 current spec 完成结构性对齐。
+- archived executable-planner artifacts 已归档为历史参考，不再作为 current planner baseline。
 - VACE Phase 1A control-branch 数据路线与 planner 训练路线独立，训练阶段不互相依赖。
 
 详细状态、证据路径和 next actions 见 `../STATUS.md`。

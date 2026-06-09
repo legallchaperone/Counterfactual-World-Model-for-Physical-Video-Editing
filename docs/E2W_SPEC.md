@@ -17,15 +17,15 @@ semantic intervention
 
 E2W is not a generic video editing benchmark, not pure text-to-video generation, and not a claim that the model already learns physical world models. The current goal is to make the counterfactual edit contract explicit and testable.
 
-## 2. Planner Output Contract
+## 2. Counterfactual Planner Output Contract
 
-The current compliant planner output schema is:
+The current compliant planner is the **Counterfactual Planner**. Its compatible schema id is:
 
 ```text
 e2w.planner_output.v8_tool_augmented_grounding.v1
 ```
 
-The planner receives the original observed video, the user remove request, and any upstream context needed for provenance or audit. It must return one complete JSON object that describes the target and the target-free counterfactual state. Grounding, first-frame edit, and renderer preparation happen downstream from this planner JSON.
+The Counterfactual Planner receives the original observed video, the user remove request, and any upstream context needed for provenance or audit. It must return one complete JSON object that describes the target and the target-free counterfactual state. Grounding, first-frame edit, and renderer preparation happen downstream from this planner JSON.
 
 Required planner top-level keys:
 
@@ -38,7 +38,7 @@ if_removed
 
 Rules:
 
-- The schema version is `e2w.planner_output.v8_tool_augmented_grounding.v1`.
+- The schema id is `e2w.planner_output.v8_tool_augmented_grounding.v1`; this string is retained for artifact compatibility and is not the method name.
 - `edit_type` must be exactly `remove`.
 - `target_ref` must be a concise visual reference to the removed target object.
 - `counterfactual_state` must contain exactly these non-empty fields:
@@ -60,9 +60,9 @@ Rules:
 - The runner must store the planner/model JSON output as an upstream artifact.
 - Runtime or adapter code must not silently rewrite planner JSON, replace planner text, or substitute teacher/manual text to make a run pass.
 
-### Planner-to-Runtime Mapping
+### Counterfactual Planner-to-Runtime Mapping
 
-The current planner does not output `quadmask_spec` directly. The downstream grounding bridge must derive runtime inputs from planner output as follows:
+The Counterfactual Planner does not output `quadmask_spec` directly. The downstream grounding bridge must derive runtime inputs from planner output as follows:
 
 ```text
 planner.target_ref
@@ -93,7 +93,7 @@ The older executable planner schema is archived for historical comparison only:
 e2w.planner_io.v6_executable.v1
 ```
 
-Do not use `e2w.planner_io.v6_executable.v1`, v6, or v7 artifacts as current planner baselines. They may be cited only as historical evidence.
+Do not use the archived executable-planner schema or artifacts as current planner baselines. They may be cited only as historical evidence.
 
 ## 3. Current Canonical Runtime Contract
 
@@ -341,5 +341,5 @@ It also does not define checkpoint names, run directory names, or historical exp
 - Do not use backend generation masks to encode E2W semantics.
 - Do not introduce multiple generation-mask modes in current spec.
 - Do not claim visual/control success from runtime completion.
-- Do not use v6/v7 executable-planner artifacts as current planner baselines.
+- Do not use archived executable-planner artifacts as current planner baselines.
 - Do not revive archived docs as current constraints.

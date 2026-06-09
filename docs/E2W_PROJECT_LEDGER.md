@@ -2,7 +2,7 @@
 
 > **Owner / update convention:** This file is the assistant-maintained continuity ledger for E2W. The user asked that Hermes maintains it. Treat it as a project state ledger, not a scratchpad. Update it only when a durable fact, boundary decision, verified artifact, or next-step priority changes. Do not use it for transient task notes.
 
-Last updated: 2026-06-09T10:05:00Z
+Last updated: 2026-06-09T10:45:00Z
 Maintainer skill: `e2w-project-ledger`
 Canonical repo: `ssh cwx:/home/cwx/E2W`
 Current spec: `/home/cwx/E2W/docs/E2W_SPEC.md`
@@ -37,9 +37,9 @@ Reviewer one-liner:
 
 ## 2. Current Planner and Runtime Boundary
 
-The user clarified on 2026-06-09 that v8 is the correct planner design and that v7/v0.2 executable-planner artifacts should be archived as historical references, not treated as current baselines.
+The user clarified on 2026-06-09 that the current correct planner design should be called **Counterfactual Planner**, not a version-number route label. The existing schema id remains for artifact compatibility, but it is not the method or route name. Archived executable-planner materials are preserved under archive paths and must not be treated as current baselines.
 
-Current planner contract:
+Current Counterfactual Planner compatible schema id:
 
 ```text
 e2w.planner_output.v8_tool_augmented_grounding.v1
@@ -54,11 +54,11 @@ counterfactual_state
 if_removed
 ```
 
-The v8 planner is intentionally text/state-first. It does not directly output executable `quadmask_spec`; instead, the current intended pipeline is:
+The Counterfactual Planner is intentionally text/state-first. It does not directly output executable `quadmask_spec`; instead, the current intended pipeline is:
 
 ```text
 original video + user remove request
--> v8 planner JSON
+-> Counterfactual Planner JSON
 -> target_ref grounding with GroundingDINO/SAM2 or equivalent
 -> quadmask_npy
 -> vace_prompt from counterfactual_state / if_removed
@@ -89,7 +89,7 @@ Durable boundary decisions:
 - Region semantics live only in `quadmask_npy`.
 - Text input is named only `vace_prompt`.
 - Training manifests / target videos / side packets / cycle roles are not defined by the current runtime spec.
-- v6/v7 executable-planner schemas and artifacts are archived references only, not current planner baselines.
+- Archived executable-planner schemas, tests, fixtures, tools, and artifacts are archived references only, not current planner baselines.
 
 ---
 
@@ -132,20 +132,21 @@ head before cleanup: 918ca7c A13 加入 first frame edit，完善端到端 pipel
 
 ## 5. Workstream State
 
-### A. Planner / Counterfactual State
+### A. Counterfactual Planner / Counterfactual State
 
 Current understanding:
 
-- v8 is the current correct planner design.
-- v8 is strong on parse/schema/target-free counterfactual text and should be the basis for current planner work.
-- The remaining main gap is not returning to v7, but making the v8 grounding bridge and runtime adapter conform to `docs/E2W_SPEC.md`.
-- v7/v0.2 executable-planner artifacts are archived historical evidence.
+- Counterfactual Planner is the current correct planner design.
+- Its compatible schema id is `e2w.planner_output.v8_tool_augmented_grounding.v1`; keep this string for artifact compatibility only.
+- Counterfactual Planner is strong on parse/schema/target-free counterfactual text and should be the basis for current planner work.
+- The remaining main gap is making the Counterfactual Planner grounding bridge and runtime adapter conform to `docs/E2W_SPEC.md`.
+- Archived executable-planner materials are archived historical evidence.
 
 Do not claim:
 
-- v8 can run full forward pass cleanly until the grounding bridge and current VACE runtime mapping are structurally verified;
+- Counterfactual Planner can run full forward pass cleanly until the grounding bridge and current VACE runtime mapping are structurally verified;
 - target-free text success alone implies renderer/control success;
-- v7/v0.2 is the current planner baseline.
+- an archived executable-planner route is the current planner baseline.
 
 ### B. VACE / Quadmask Control
 
@@ -236,17 +237,17 @@ Interface success alone must never be reported as visual/control/research succes
 The next meaningful E2W proof should be small and controlled:
 
 ```text
-Use v8 planner outputs.
+Use Counterfactual Planner outputs.
 Verify the grounding bridge and current runtime mapping:
   - planner JSON parse/schema passes;
   - target_ref grounds to usable masks;
   - quadmask_npy has exact values and shape;
   - generation_mask is full-domain all-255;
-  - vace_prompt is target-free and produced from v8 state;
+  - vace_prompt is target-free and produced from Counterfactual Planner state;
   - metadata links planner JSON -> grounding -> quadmask -> VACE inputs.
 ```
 
-Avoid long full-pipeline runs until this v8 structural spine is proven.
+Avoid long full-pipeline runs until this Counterfactual Planner structural spine is proven.
 
 ---
 
@@ -261,7 +262,7 @@ Avoid long full-pipeline runs until this v8 structural spine is proven.
 7. Do not treat `edited_video` existence, non-black frames, or signal consumption metadata as visual success.
 8. Do not claim learned add pipeline from the 0076 add-mug teacher/manual run.
 9. Do not revive archived docs as current constraints.
-10. Do not use v6/v7 executable-planner artifacts as current baselines.
+10. Do not use archived executable-planner artifacts as current baselines.
 
 ---
 

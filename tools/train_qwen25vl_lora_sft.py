@@ -57,9 +57,9 @@ class PlannerSFTDataset(Dataset):
         assistant_text = row["messages"][1]["content"]
 
         # Legacy planner SFT rows store text in messages[0].content and a top-level
-        # video path. v8 Line-C rows store native Qwen VL image/text content in
-        # messages[0].content. Support both formats so old training commands keep
-        # working while image-only v8 SFT can reuse this trainer.
+        # video path. Counterfactual Planner Line-C rows store native Qwen VL
+        # image/text content in messages[0].content. Support both formats so old
+        # training commands keep working while image-only SFT can reuse this trainer.
         if "video" in row:
             user_text = row["messages"][0]["content"]
             video_path = row["video"]
@@ -78,7 +78,7 @@ class PlannerSFTDataset(Dataset):
         else:
             content = row["messages"][0]["content"]
             if not isinstance(content, list):
-                raise ValueError("v8 image SFT rows must store user content as a list")
+                raise ValueError("Counterfactual Planner image SFT rows must store user content as a list")
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "image":
                     image_path = item.get("image")

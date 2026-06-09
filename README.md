@@ -6,7 +6,7 @@ Given an observed video and a user intervention such as "remove the object" or "
 
 ```text
 user intervention
-→ v8 planner/model output
+→ Counterfactual Planner output
 → grounding bridge
 → counterfactual first frame
 → causal-region quadmask
@@ -49,7 +49,7 @@ This means the video renderer should not receive the original video as a hidden 
 
 ## Runtime Contract in One Screen
 
-The current planner contract is v8:
+The current planner contract is the Counterfactual Planner. Its compatible schema id remains `e2w.planner_output.v8_tool_augmented_grounding.v1` for existing artifacts.
 
 ```text
 target_ref
@@ -96,9 +96,9 @@ See `docs/E2W_SPEC.md` for the precise rules.
 
 See `STATUS.md` for the latest details. Short version:
 
-- v8 is the current correct planner design.
-- v6/v7 executable-planner artifacts are archived references only, not current baselines.
-- The main blocker is making the v8 grounding bridge and runtime adapter conform to the current spec.
+- Counterfactual Planner is the current correct planner design.
+- Archived executable-planner artifacts are archived references only, not current baselines.
+- The main blocker is making the Counterfactual Planner grounding bridge and runtime adapter conform to the current spec.
 - The VACE control-branch training path is separate and still needs corrected real training plus control/visual validation.
 - The add pipeline now has an **INTERFACE-level** smoke success.
 

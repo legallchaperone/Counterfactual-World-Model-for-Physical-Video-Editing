@@ -8,18 +8,18 @@
 
 当前不是可以直接 full forward pass 的状态。
 
-- 当前正确 planner 设计是 v8：`e2w.planner_output.v8_tool_augmented_grounding.v1`。
-- v8 目标是先生成 target-free counterfactual state，再由 grounding bridge 生成 `quadmask_npy` 并接入 current VACE runtime。
-- v7 / v0.2 executable planner 已退出当前主线，只作为历史 artifact/reference，不再作为现状基准。
+- 当前正确 planner 设计是 Counterfactual Planner；兼容 schema id 为 `e2w.planner_output.v8_tool_augmented_grounding.v1`。
+- Counterfactual Planner 目标是先生成 target-free counterfactual state，再由 grounding bridge 生成 `quadmask_npy` 并接入 current VACE runtime。
+- archived executable-planner routes 已退出当前主线，仓库内材料统一归档，只作为历史 artifact/reference，不再作为现状基准。
 - VACE Phase 1A control-branch 数据路线与 planner 训练路线独立，训练阶段不互相依赖。
 
-在 v8 planner -> grounding bridge -> current VACE runtime 的结构性对齐完成前，不要继续 package/report 或声称 full forward 成功。
+在 Counterfactual Planner -> grounding bridge -> current VACE runtime 的结构性对齐完成前，不要继续 package/report 或声称 full forward 成功。
 
 ## 线 A - Planner 和 Grounding Bridge
 
 ### 当前目标
 
-当前 planner contract 来自 `docs/E2W_SPEC.md`：
+当前 Counterfactual Planner contract 来自 `docs/E2W_SPEC.md`：
 
 ```text
 schema: e2w.planner_output.v8_tool_augmented_grounding.v1
@@ -30,11 +30,11 @@ required fields:
   if_removed
 ```
 
-v8 planner 不直接输出 `quadmask_spec`。正确 pipeline 是：
+Counterfactual Planner 不直接输出 `quadmask_spec`。正确 pipeline 是：
 
 ```text
 original video + user remove request
--> v8 planner JSON
+-> Counterfactual Planner JSON
 -> target_ref grounding with GroundingDINO/SAM2 or equivalent
 -> quadmask_npy
 -> vace_prompt from counterfactual_state / if_removed
@@ -42,9 +42,9 @@ original video + user remove request
 -> current six-input VACE runtime
 ```
 
-### v8 当前证据
+### Counterfactual Planner 当前证据
 
-最新 v8 seed_v3 run:
+最新 Counterfactual Planner seed_v3 run:
 
 - checkpoint: `/data/cwx/E2W/checkpoints/vlm_planner_lora_v8_20260604_v3`
 - data: `/data/cwx/E2W/data/line_c_annotations/seed_v3.jsonl`
@@ -55,24 +55,24 @@ original video + user remove request
 - eval output: `/data/cwx/E2W/checkpoints/vlm_planner_lora_v8_20260604_v3/eval_v8_outputs.jsonl`
 - eval summary: 34/34 JSON parse, 33/34 schema valid, 33/34 `if_removed` pass
 - valid fill_type distribution: `background_continuation` 27, `occlusion_reveal` 6
-- details: `docs/experiments/A12_seed_v3_v8_v3_20260608.md`
+- details: `docs/archive/experiments/A12_counterfactual_planner_seed_v3_20260608.md`
 
 Evidence level: STRUCTURAL for planner text/schema compliance only.
 
 ### 当前缺口
 
-v8 尚未完成 current runtime 对齐：
+Counterfactual Planner 尚未完成 current runtime 对齐：
 
 - grounding bridge 还没有被验收为 current spec 的结构性基准；
 - `target_ref -> quadmask_npy` 需要稳定审计；
 - `generation_mask` 必须改为 current spec 的 full-domain all-255，而不是从 quadmask 派生局部 mask；
 - VACE 层 metadata 必须记录 E2W-level 名称：`vace_conditioning_video`, `vace_prompt`, `quadmask_npy`, `generation_mask`, `operation`, `frame_num`；
 - 不能把 backend adapter 的 `src_video` / `prompt` 名称当作当前 E2W runtime contract；
-- 还没有 v8 full bridge 的 30 eval / smoke structural gate。
+- 还没有 Counterfactual Planner full bridge 的 30 eval / smoke structural gate。
 
 ## Archived Planner References
 
-以下 v6/v7/v0.2 artifacts 只用于历史对比，不再作为当前 planner 基准：
+以下 archived executable-planner artifacts 只用于历史对比，不再作为当前 planner 基准；repo 内相关脚本、测试、fixtures 已移入 `tools/archive/` 和 `tests/archive/`：
 
 - `/data/cwx/E2W/runs/e2w_v7_targetfree_final_planner_remove8_20260604T0904Z`
 - `/data/cwx/E2W/checkpoints/vlm_planner_lora_physics_iq_v7_targetfree_final_20260604`
@@ -118,7 +118,7 @@ Do not use these to decide current next actions except for historical failure an
 线 A 和线 B 只在推理时汇合：
 
 ```text
-用户指令 -> v8 planner -> grounding bridge -> quadmask + VACE prompt -> VACE -> edited video
+用户指令 -> Counterfactual Planner -> grounding bridge -> quadmask + VACE prompt -> VACE -> edited video
 ```
 
 ## 线 C - Add Pipeline INTERFACE Smoke
@@ -154,22 +154,22 @@ Therefore this run remains INTERFACE/provenance smoke only. It does not prove co
 
 ## 当前阻塞点
 
-主 blocker 是 v8 已经成为正确 planner design，但后续 grounding bridge / runtime adapter 仍未按 current spec 收敛。
+主 blocker 是 Counterfactual Planner 已经成为正确 planner design，但后续 grounding bridge / runtime adapter 仍未按 current spec 收敛。
 
-当前不要从 v6/v7 planner checkpoint 继续跑 full forward pass。
+当前不要从 archived executable-planner checkpoint 继续跑 full forward pass。
 
 ## Next Actions
 
-- [ ] 1. 修正 `tools/run_e2w_pipeline_v8.py` 的 bridge contract，使输出符合 `docs/E2W_SPEC.md`：
+- [ ] 1. 修正 `tools/run_counterfactual_planner_pipeline.py` 的 bridge contract，使输出符合 `docs/E2W_SPEC.md`：
   - `generation_mask` full-domain all-255；
   - metadata 使用 E2W-level 六输入命名；
   - backend `src_video`/`prompt` 只作为 adapter 内部名；
   - 记录 planner JSON -> grounding -> quadmask -> vace_prompt -> VACE inputs 的证据链。
-- [ ] 2. 对 v8 eval 做小规模 bridge smoke，先 `--skip-vace` 验证 STRUCTURAL：
+- [ ] 2. 对 Counterfactual Planner eval 做小规模 bridge smoke，先 `--skip-vace` 验证 STRUCTURAL：
   - planner JSON parse/schema；
   - target_ref grounding 成功；
   - quadmask shape/value；
   - full-domain generation_mask；
   - vace_prompt target-free。
 - [ ] 3. 通过 structural gate 后，再跑一条 VACE INTERFACE smoke。
-- [ ] 4. 只有 v8 bridge structural gate 通过后，才进入 package/report/freshness audit。
+- [ ] 4. 只有 Counterfactual Planner bridge structural gate 通过后，才进入 package/report/freshness audit。

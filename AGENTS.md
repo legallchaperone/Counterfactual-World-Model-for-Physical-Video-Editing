@@ -49,7 +49,7 @@ Reviewer boundary:
 
 ## 2. Current Planner Contract
 
-The current correct planner design is v8:
+The current correct planner design is the Counterfactual Planner. Its compatible schema id is:
 
 ```text
 e2w.planner_output.v8_tool_augmented_grounding.v1
@@ -66,12 +66,13 @@ if_removed
 
 Rules:
 
-- Treat v8 as the current planner baseline.
+- Treat Counterfactual Planner as the current planner baseline.
+- Do not use the schema id's historical version-number substring as a method or route name.
 - `counterfactual_state` must contain the current spec fields: `fill_type`, `surface`, `lighting`, `shadow`, `temporal`, `interaction`, and `geometry`.
 - `if_removed` must be target-free and must not use negative/remove-residue wording.
 - `target_ref` feeds the grounding bridge; the planner does not directly output current `quadmask_npy`.
 - The grounding bridge must produce `quadmask_npy` and current-spec runtime metadata.
-- Do not use v6/v7/v0.2 executable-planner artifacts as current planner baselines. They are archived historical references only.
+- Do not use archived executable-planner artifacts as current planner baselines. They are archived historical references only.
 
 ## 3. Current VACE Runtime Contract
 
@@ -191,8 +192,7 @@ For code or pipeline-contract changes, run relevant static tests:
 
 ```bash
 cd /home/cwx/E2W
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests/test_v02_contracts.py
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests/test_v03_quad_vace_contracts.py
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest discover -s tests -p 'test*.py'
 ```
 
 If a test fails, fix the data, prompt, parser, planner, runner, or test expectation to match the accepted spec. Do not weaken tests merely to make a run pass.
