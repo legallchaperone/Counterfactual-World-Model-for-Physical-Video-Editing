@@ -39,7 +39,6 @@ from build_add_quadmask_from_edited_first_frame import (  # noqa: E402
 from e2w_v0_common import (  # noqa: E402
     DEFAULT_BASE_MODEL,
     DEFAULT_PLANNER,
-    build_planner_user_prompt,
     extract_first_frame,
     serialize_first_frame_prompt,
     video_meta,
@@ -94,16 +93,50 @@ def ensure_frame_num(frame_num: int) -> None:
         raise ValueError(f"frame_num must be Wan-compatible 4n+1, got {frame_num}")
 
 
-def write_split_jsonl(path: Path, *, sample_id: str, video: Path, user_prompt: str, attempt: int) -> None:
-    extra = None
+def build_add_planner_user_prompt(sample_id: str, user_prompt: str, *, attempt: int) -> str:
+    rules = [
+        "Return only one complete top-level JSON object. Do not include markdown, prose, comments, or fallback text.",
+        "The operation must be add.",
+        "The planner/model output must include vace_prompt as a final field produced by this inference attempt.",
+        "Do not prefill, copy, or substitute a teacher/manual vace_prompt.",
+        "vace_prompt should describe the edited scene after the addition and may mention the object to add.",
+        "vace_prompt must not contain removal-residue language such as absent, missing, gone, no longer visible, removed, erased, deleted, without the added object, or where the object was.",
+        "Provide target_ref as a concise visual reference to the object being added.",
+        "Provide first-frame grounding for the insertion region as primary_point_norm1000 [x, y]; include primary_bbox_norm1000 [x1, y1, x2, y2] if visible or inferable.",
+        "Use norm1000 coordinates with [0, 0] at the top-left and [1000, 1000] at the bottom-right.",
+        "Provide affected_regions as short text labels for local contact, shadow, reflection, or support regions that may change.",
+    ]
     if attempt > 1:
-        extra = (
-            "This is retry attempt %d for an add-operation interface run. "
-            "Return a complete JSON object that exactly satisfies the executable planner schema. "
-            "The operation must be add. Provide add target grounding in quadmask_spec.primary and local affected regions. "
-            "Do not include markdown."
-        ) % attempt
-    content = build_planner_user_prompt(sample_id, user_prompt, operation="add", extra_rules=extra)
+        rules.extend(
+            [
+                f"This is retry attempt {attempt} for an add-operation interface run.",
+                "Fix only contract failures from the previous attempt by returning a fresh complete planner JSON.",
+                "Keep vace_prompt positive for add; do not describe removal, disappearance, absence, or cleanup.",
+            ]
+        )
+    schema = {
+        "sample_id": sample_id,
+        "operation": "add",
+        "target_ref": "short visual reference to the object being added",
+        "vace_prompt": "positive edited-scene prompt produced by this planner/model inference",
+        "primary_point_norm1000": [500, 500],
+        "primary_bbox_norm1000": [450, 450, 550, 550],
+        "affected_regions": ["local contact shadow or nearby surface"],
+    }
+    return (
+        "You are the Edit2World add-operation planner. Given the video and user request, "
+        "return a current-spec add planner JSON for the first-frame edit, grounding bridge, and VACE prompt path.\n\n"
+        f"Required JSON shape:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        "Rules:\n- "
+        + "\n- ".join(rules)
+        + "\n\n"
+        f"Set sample_id exactly to {sample_id}.\n"
+        f"User request: {user_prompt.strip()}\n"
+    )
+
+
+def write_split_jsonl(path: Path, *, sample_id: str, video: Path, user_prompt: str, attempt: int) -> None:
+    content = build_add_planner_user_prompt(sample_id, user_prompt, attempt=attempt)
     row = {"id": sample_id, "video": str(video), "messages": [{"role": "user", "content": content}], "metadata": {"operation": "add"}}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -181,13 +214,19 @@ def run_planner(args: argparse.Namespace, run_dir: Path) -> tuple[dict[str, Any]
     raise RuntimeError("planner/model inference failed after retries: " + " | ".join(errors))
 
 
-def build_conditioning_video(edited_first_frame: Path, out_path: Path, *, frame_num: int, fps: float) -> None:
+def build_conditioning_video(edited_first_frame: Path, out_path: Path, *, frame_num: int, fps: float) -> dict[str, Any]:
     image = load_rgb(edited_first_frame)
+    # Current VACE conditioning carries only the edited first frame; future frames are blank placeholders, not source-video frames.
     frames = [np.zeros_like(image) for _ in range(frame_num)]
     frames[0] = image
     write_rgb_video(out_path, frames, fps=fps)
-
-
+    return {
+        "frame_0_is_edited_first_frame": True,
+        "future_frames_are_zero_filled": True,
+        "future_frames_source_video_used": False,
+        "conditioning_strategy": "edited_first_frame_plus_zero_filled_future_frames",
+        "frame_count": frame_num,
+    }
 
 
 def load_qwen_edit_pipe_for_interface(args: argparse.Namespace) -> Any:
@@ -234,6 +273,11 @@ def build_generation_mask(out_npy: Path, out_mp4: Path, *, frame_num: int, heigh
     }
 
 
+def planner_target_ref_from_raw(raw_pred_path: Path) -> str | None:
+    value = json.loads(raw_pred_path.read_text(encoding="utf-8")).get("target_ref")
+    return str(value).strip() if str(value or "").strip() else None
+
+
 def main() -> int:
     args = parse_args()
     if args.cuda_visible_devices:
@@ -262,13 +306,15 @@ def main() -> int:
     qwen_pipe = load_qwen_edit_pipe_for_interface(args)
     qwen_prompt = serialize_first_frame_prompt(edit_plan)
     write_text(run_dir / "qwen_edit_prompt.txt", qwen_prompt)
-    edited = qwen_edit_for_interface(qwen_pipe, Image.open(input_first_frame).convert("RGB"), qwen_prompt, args)
+    input_image = Image.open(input_first_frame).convert("RGB")
+    input_size = input_image.size
+    edited = qwen_edit_for_interface(qwen_pipe, input_image, qwen_prompt, args)
     edited_first_frame = run_dir / "edited_first_frame.png"
-    edited = edited.resize(Image.open(input_first_frame).size, Image.Resampling.LANCZOS)
+    edited = edited.resize(input_size, Image.Resampling.LANCZOS)
     edited.save(edited_first_frame)
 
     vace_conditioning = run_dir / "vace_conditioning_video.mp4"
-    build_conditioning_video(edited_first_frame, vace_conditioning, frame_num=args.frame_num, fps=args.fps)
+    conditioning_meta = build_conditioning_video(edited_first_frame, vace_conditioning, frame_num=args.frame_num, fps=args.fps)
 
     mask_dir = run_dir / "add_quadmask"
     mask_dir.mkdir(parents=True, exist_ok=True)
@@ -358,10 +404,11 @@ def main() -> int:
             "learned_planner_add_quality_claimed": False,
             "output_path": str(run_dir / "planner_output.json"),
         },
-        "target_ref": (edit_plan.get("edit_subject") or {}).get("label"),
+        "target_ref": planner_target_ref_from_raw(Path(planner_paths["raw_pred"])),
         "vace_prompt": vace_prompt,
         "frame_num": args.frame_num,
         "qwen_edit": {"used": True, "edited_first_frame": str(edited_first_frame), "prompt_path": str(run_dir / "qwen_edit_prompt.txt")},
+        "vace_conditioning_video": conditioning_meta,
         "sam2": sam2_info,
         "quadmask": quad_meta,
         "generation_mask": gen_meta,

@@ -169,8 +169,15 @@ def sam2_primary_from_edited_frame(
     # Validate grounding against edited clip metadata.
     meta = video_meta(clip_path)
     grounding = primary_grounding_from_spec(quadmask_spec, meta)
+    propagation_spec = {
+        "primary": {
+            "first_frame_bbox": grounding.get("bbox"),
+            "point": grounding.get("point"),
+            "negative_points": grounding.get("negative_points") or [],
+        }
+    }
     ns = argparse.Namespace(sam2_repo=sam2_repo, sam2_ckpt=sam2_ckpt, sam2_cfg=sam2_cfg)
-    propagated = sam2_propagate(ns, clip_path, quadmask_spec)
+    propagated = sam2_propagate(ns, clip_path, propagation_spec)
     primary = propagated[0].astype(bool)
     info = {
         "used_for_quadmask": True,

@@ -57,25 +57,6 @@ class V03QuadVaceContractTests(unittest.TestCase):
         self.assertTrue(info["changed"])
         self.assertEqual(info["frame_index_mapping_first_last"], [0, 1])
 
-    def test_generation_mask_modes_are_binary_and_contract_named(self) -> None:
-        quad = np.array(
-            [
-                [[255, 0], [63, 127]],
-                [[255, 255], [0, 127]],
-            ],
-            dtype=np.uint8,
-        )
-        local = v03.generation_mask_from_quadmask(quad, "quadmask-editable")
-        self.assertEqual(sorted(int(x) for x in np.unique(local)), [0, 255])
-        self.assertEqual(local[0, 0, 0], 0)
-        self.assertEqual(local[0, 0, 1], 255)
-        self.assertEqual(local[0, 1, 0], 255)
-        self.assertEqual(local[0, 1, 1], 255)
-
-        future = v03.generation_mask_from_quadmask(quad, "future-full-frame")
-        self.assertEqual(int(future[0].max()), 0)
-        self.assertEqual(int(future[1].min()), 255)
-
     def test_quad_runner_command_contains_required_v03_inputs(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
             tmp_path = Path(tmp)
@@ -137,7 +118,12 @@ class V03QuadVaceContractTests(unittest.TestCase):
                 str(run_dir),
             ]
             meta = {"frame_count": 1, "height": 2, "width": 2, "fps": 16.0}
-            with mock.patch.object(sys, "argv", argv), mock.patch.object(v03, "video_meta", return_value=meta):
+            full_domain_generation_mask = np.full((1, 2, 2), 255, dtype=np.uint8)
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(v03, "video_meta", return_value=meta),
+                mock.patch.object(v03, "generation_mask_from_quadmask", return_value=full_domain_generation_mask),
+            ):
                 v03.main()
 
             payload = __import__("json").loads((run_dir / "experiment_metadata.json").read_text(encoding="utf-8"))

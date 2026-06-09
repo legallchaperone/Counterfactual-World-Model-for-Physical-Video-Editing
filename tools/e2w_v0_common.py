@@ -556,7 +556,7 @@ def _object_count_constraints(values: list[str]) -> list[str]:
 
 def infer_target_from_sample(sample: dict[str, Any]) -> str:
     user = sample.get("messages", [{}])[0].get("content", "")
-    match = re.search(r"User request:\s*remove\s+(.+?)(?:\.|$)", user, re.I)
+    match = re.search(r"User request:\s*(?:remove|add|insert|place|put|introduce)\s+(.+?)(?:\.|$)", user, re.I)
     if match:
         return match.group(1).strip()
     return "target object"
@@ -641,6 +641,9 @@ def _first_target(raw: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]
     targets = raw.get("target_objects")
     if isinstance(targets, list) and targets and isinstance(targets[0], dict):
         return targets[0]
+    target_ref = str(raw.get("target_ref") or "").strip()
+    if target_ref:
+        return {"name": target_ref, "aliases": []}
     return {"name": infer_target_from_sample(sample), "aliases": []}
 
 
@@ -672,6 +675,7 @@ def _bbox_from_raw(raw: dict[str, Any], width: int, height: int) -> list[int] | 
     target = _first_target(raw, {})
     for key in ("first_frame_bbox", "bbox_first_frame", "bbox_2d", "bbox", "box"):
         candidates.append(primary.get(key))
+        candidates.append(raw.get(key))
         if isinstance(target, dict):
             candidates.append(target.get(key))
     for cand in candidates:
@@ -689,6 +693,10 @@ def _bbox_from_raw(raw: dict[str, Any], width: int, height: int) -> list[int] | 
     rect_box = _box_from_rectangle_dict(primary)
     if rect_box is not None and box_is_valid(rect_box, width, height):
         return rect_box
+    for key in ("primary_bbox_norm1000", "bbox_norm1000"):
+        norm_box = norm1000_box_to_pixel(raw.get(key), width, height)
+        if norm_box is not None:
+            return norm_box
     return None
 
 
@@ -704,6 +712,18 @@ def _point_from_raw(raw: dict[str, Any], bbox: list[int] | None, width: int, hei
                 continue
             if point_is_valid(out, width, height):
                 return out
+        pt = raw.get(key)
+        if isinstance(pt, list) and len(pt) == 2:
+            try:
+                out = [int(round(float(pt[0]))), int(round(float(pt[1])))]
+            except (TypeError, ValueError):
+                continue
+            if point_is_valid(out, width, height):
+                return out
+    for key in ("primary_point_norm1000", "point_norm1000"):
+        norm_point = norm1000_point_to_pixel(raw.get(key), width, height)
+        if norm_point is not None:
+            return norm_point
     if bbox is not None:
         return [int((bbox[0] + bbox[2]) / 2), int((bbox[1] + bbox[3]) / 2)]
     return None
@@ -734,6 +754,8 @@ def normalize_to_e2w_contract(
             counterfactual_outcomes.extend(_strings(cfe.get("if_added")))
         else:
             counterfactual_outcomes.extend(_strings(cfe.get("if_removed")))
+    if op == "add" and str(raw.get("vace_prompt") or "").strip():
+        counterfactual_outcomes.extend(_strings(raw.get("vace_prompt")))
     counterfactual_outcomes = _dedupe_strings([x for x in counterfactual_outcomes if x])
     observed_dynamics = _dedupe_strings([x for x in observed_dynamics if x])
 
@@ -745,6 +767,9 @@ def normalize_to_e2w_contract(
         else:
             scene_caption = str(cfe.get("if_removed") or "").strip()
         outcome_effects.extend(counterfactual_outcomes)
+    if op == "add" and str(raw.get("vace_prompt") or "").strip():
+        scene_caption = str(raw.get("vace_prompt") or "").strip()
+        outcome_effects = [scene_caption]
     preserve_regions = _strings(cfe.get("unchanged_regions") if isinstance(cfe, dict) else [])
     if op == "add":
         local_fill_instruction = "Place the target object naturally in the specified local area while preserving neighboring pixels."
@@ -800,6 +825,7 @@ def normalize_to_e2w_contract(
     raw_primary = raw_q.get("primary", {}) if isinstance(raw_q.get("primary"), dict) else {}
     raw_affected = raw_q.get("affected", {}) if isinstance(raw_q.get("affected"), dict) else {}
     affected_labels = _strings(raw_affected.get("objects"))
+    affected_labels.extend(_strings(raw.get("affected_regions")))
     if isinstance(cfe, dict):
         affected_labels.extend(_strings(cfe.get("affected_regions")))
 

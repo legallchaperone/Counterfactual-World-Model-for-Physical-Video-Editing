@@ -351,8 +351,26 @@ def build_quadmask(masks: dict[int, np.ndarray], frame_count: int, height: int, 
         quad[frame_idx][mo & ~ma] = 0
         quad[frame_idx][mo & ma] = 63
         quad[frame_idx][~mo & ma] = 127
-    generation_mask = np.where(quad != 255, 255, 0).astype(np.uint8)
+    generation_mask = np.full((frame_count, height, width), 255, dtype=np.uint8)
     return quad, generation_mask
+
+
+def mask_metadata(mask: np.ndarray) -> dict[str, Any]:
+    return {
+        "shape": list(mask.shape),
+        "dtype": str(mask.dtype),
+        "values": sorted(int(value) for value in np.unique(mask)),
+    }
+
+
+def generation_mask_metadata(mask: np.ndarray) -> dict[str, Any]:
+    values = sorted(int(value) for value in np.unique(mask))
+    return {
+        "generation_mask_shape": list(mask.shape),
+        "generation_mask_values": values,
+        "generation_mask_is_full_domain": values == [255],
+        "generation_mask_encodes_quadmask_semantics": False,
+    }
 
 
 def save_quadmask_preview(frame_path: Path, quad_frame: np.ndarray, out_path: Path) -> None:
@@ -447,7 +465,15 @@ def run_first_frame_edit(args: argparse.Namespace, anchor: Path, target_ref: str
     }
 
 
-def run_vace(args: argparse.Namespace, video_id: str, src_video: Path, generation_mask_video: Path, quadmask_npy: Path, prompt: str, frame_num: int) -> tuple[str | None, dict[str, Any]]:
+def run_vace(
+    args: argparse.Namespace,
+    video_id: str,
+    vace_conditioning_video: Path,
+    generation_mask_video: Path,
+    quadmask_npy: Path,
+    vace_prompt: str,
+    frame_num: int,
+) -> tuple[str | None, dict[str, Any]]:
     save_dir = args.output_dir / f"vace_{video_id}"
     output_video = args.output_dir / f"edited_video_{video_id}.mp4"
     command = [
@@ -462,7 +488,7 @@ def run_vace(args: argparse.Namespace, video_id: str, src_video: Path, generatio
         "--size",
         args.vace_size,
         "--src_video",
-        str(src_video.resolve()),
+        str(vace_conditioning_video.resolve()),
         "--generation_mask",
         str(generation_mask_video.resolve()),
         "--quadmask_npy",
@@ -470,7 +496,7 @@ def run_vace(args: argparse.Namespace, video_id: str, src_video: Path, generatio
         "--operation",
         "remove",
         "--prompt",
-        prompt,
+        vace_prompt,
         "--frame_num",
         str(frame_num),
         "--save_dir",
@@ -484,7 +510,18 @@ def run_vace(args: argparse.Namespace, video_id: str, src_video: Path, generatio
         "--offload_model",
     ]
     save_dir.mkdir(parents=True, exist_ok=True)
-    write_json(save_dir / "vace_command.json", {"argv": command, "cwd": str(Path.cwd())})
+    write_json(
+        save_dir / "vace_backend_adapter_command.json",
+        {
+            "argv": command,
+            "cwd": str(Path.cwd()),
+            "legacy_backend_arg_adapter_used": True,
+            "backend_visual_condition_arg": "--src_video",
+            "e2w_visual_condition_input": "vace_conditioning_video",
+            "backend_text_arg": "--prompt",
+            "e2w_text_input": "vace_prompt",
+        },
+    )
     env = os.environ.copy()
     env.setdefault("USE_TF", "0")
     env.setdefault("TRANSFORMERS_NO_TF", "1")
@@ -493,7 +530,7 @@ def run_vace(args: argparse.Namespace, video_id: str, src_video: Path, generatio
     (save_dir / "vace_stderr.txt").write_text(proc.stderr, encoding="utf-8")
     info = {
         "returncode": proc.returncode,
-        "command_path": str(save_dir / "vace_command.json"),
+        "backend_adapter_command_path": str(save_dir / "vace_backend_adapter_command.json"),
         "stdout_path": str(save_dir / "vace_stdout.txt"),
         "stderr_path": str(save_dir / "vace_stderr.txt"),
     }
@@ -668,17 +705,17 @@ def main() -> int:
                     raise RuntimeError("first frame edit did not produce an edited frame for VACE")
                 vace_frame_count = next_vace_frame_count(len(frames))
                 vace_quadmask = pad_time_axis(quadmask, vace_frame_count)
-                vace_generation_mask = pad_time_axis(generation_mask, vace_frame_count)
+                vace_generation_mask = np.full_like(vace_quadmask, 255, dtype=np.uint8)
                 vace_quadmask_path = args.output_dir / f"quadmask_{video_id}_vace.npy"
                 vace_generation_mask_npy_path = args.output_dir / f"generation_mask_{video_id}_vace.npy"
                 vace_generation_mask_video_path = args.output_dir / f"generation_mask_{video_id}.mp4"
-                src_video_path = args.output_dir / f"src_video_{video_id}.mp4"
+                vace_conditioning_video_path = args.output_dir / f"vace_conditioning_video_{video_id}.mp4"
                 np.save(vace_quadmask_path, vace_quadmask)
                 np.save(vace_generation_mask_npy_path, vace_generation_mask)
                 write_gray_video(vace_generation_mask, vace_generation_mask_video_path, args.vace_fps)
                 write_video_from_frames(
                     frames,
-                    src_video_path,
+                    vace_conditioning_video_path,
                     args.vace_fps,
                     target_frame_count=vace_frame_count,
                     first_frame_override=Path(edited_frame_path),
@@ -686,7 +723,7 @@ def main() -> int:
                 vace_output_path, vace_info = run_vace(
                     args,
                     video_id,
-                    src_video_path,
+                    vace_conditioning_video_path,
                     vace_generation_mask_video_path,
                     vace_quadmask_path,
                     vace_prompt,
@@ -694,12 +731,21 @@ def main() -> int:
                 )
                 vace_info.update(
                     {
-                        "src_video": str(src_video_path),
-                        "src_video_first_frame": edited_frame_path,
+                        "legacy_backend_arg_adapter_used": True,
                         "vace_frame_count": vace_frame_count,
-                        "quadmask_vace_npy": str(vace_quadmask_path),
-                        "generation_mask_vace_npy": str(vace_generation_mask_npy_path),
-                        "generation_mask_video": str(vace_generation_mask_video_path),
+                        "vace_runtime_inputs": {
+                            "vace_conditioning_video": str(vace_conditioning_video_path),
+                            "quadmask_npy": str(vace_quadmask_path),
+                            "generation_mask": str(vace_generation_mask_video_path),
+                            "operation": "remove",
+                            "vace_prompt": vace_prompt,
+                            "frame_num": vace_frame_count,
+                        },
+                        "vace_runtime_input_metadata": {
+                            "vace_conditioning_video_first_frame": edited_frame_path,
+                            "quadmask": mask_metadata(vace_quadmask),
+                            "generation_mask": generation_mask_metadata(vace_generation_mask),
+                        },
                     }
                 )
             elif vace_prompt_valid and args.skip_vace:
@@ -728,6 +774,71 @@ def main() -> int:
                     "debug_quadmask": str(quadmask_debug_path),
                     "quadmask_npy": str(quadmask_path),
                     "generation_mask_npy": str(generation_mask_path),
+                    "quadmask_metadata": mask_metadata(quadmask),
+                    "generation_mask_metadata": generation_mask_metadata(generation_mask),
+                    "vace_runtime_inputs": {
+                        "vace_conditioning_video": (
+                            vace_info.get("vace_runtime_inputs", {}).get("vace_conditioning_video")
+                            if isinstance(vace_info.get("vace_runtime_inputs"), dict)
+                            else None
+                        ),
+                        "quadmask_npy": (
+                            vace_info.get("vace_runtime_inputs", {}).get("quadmask_npy")
+                            if isinstance(vace_info.get("vace_runtime_inputs"), dict)
+                            else str(quadmask_path)
+                        ),
+                        "generation_mask": (
+                            vace_info.get("vace_runtime_inputs", {}).get("generation_mask")
+                            if isinstance(vace_info.get("vace_runtime_inputs"), dict)
+                            else str(generation_mask_path)
+                        ),
+                        "operation": "remove",
+                        "vace_prompt": vace_prompt,
+                        "frame_num": (
+                            vace_info.get("vace_runtime_inputs", {}).get("frame_num")
+                            if isinstance(vace_info.get("vace_runtime_inputs"), dict)
+                            else len(frames)
+                        ),
+                    },
+                    "source_video_passed_to_vace": False,
+                    "evidence_chain": {
+                        "planner_json": {
+                            "json_parse_ok": item["json_parse_ok"],
+                            "schema_valid": item["schema_valid"],
+                            "raw_output_recorded": True,
+                            "parsed_recorded": isinstance(item["parsed"], dict),
+                            "target_ref": target_ref,
+                        },
+                        "grounding": {
+                            "target_ref": target_ref,
+                            "bbox_xyxy": list(bbox),
+                            "bbox_confidence": confidence,
+                            "debug_grounding": str(grounding_path),
+                            "mask_frame_count": len(masks),
+                        },
+                        "quadmask": {
+                            "path": str(quadmask_path),
+                            **mask_metadata(quadmask),
+                        },
+                        "vace_prompt": {
+                            "value": vace_prompt,
+                            "valid": vace_prompt_valid,
+                            "error": vace_prompt_error,
+                            "source": "planner_json_counterfactual_state",
+                        },
+                        "vace_runtime_inputs": (
+                            vace_info.get("vace_runtime_inputs")
+                            if isinstance(vace_info.get("vace_runtime_inputs"), dict)
+                            else {
+                                "vace_conditioning_video": None,
+                                "quadmask_npy": str(quadmask_path),
+                                "generation_mask": str(generation_mask_path),
+                                "operation": "remove",
+                                "vace_prompt": vace_prompt,
+                                "frame_num": len(frames),
+                            }
+                        ),
+                    },
                     "frame_count": len(frames),
                     "mask_frame_count": len(masks),
                 }
