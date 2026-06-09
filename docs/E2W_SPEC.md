@@ -17,7 +17,73 @@ semantic intervention
 
 E2W is not a generic video editing benchmark, not pure text-to-video generation, and not a claim that the model already learns physical world models. The current goal is to make the counterfactual edit contract explicit and testable.
 
-## 2. Current Canonical Runtime Contract
+## 2. Planner Output Contract
+
+The current compliant planner output schema is:
+
+```text
+e2w.planner_io.v6_executable.v1
+```
+
+The planner receives the original observed video, the user add/remove request, and any upstream context needed for provenance or audit. It must return one complete JSON object that can be validated and mapped into the current E2W runtime contract.
+
+Required planner top-level keys:
+
+```text
+schema_version
+video_id
+task_type
+edit_prompt
+target_objects
+protected_objects
+event_summary
+physical_causal_chain
+counterfactual_expectation
+quadmask_spec
+quality_flags
+```
+
+Rules:
+
+- `schema_version` must be `e2w.planner_io.v6_executable.v1`.
+- `task_type` must be exactly `remove` or `add`.
+- `task_type` must equal the downstream runtime `operation`.
+- `counterfactual_expectation.if_removed` is the remove-side source for `vace_prompt` and must satisfy the remove prompt rules in this spec.
+- `counterfactual_expectation.if_added` is the add-side edited-scene description source and must satisfy the add prompt rules in this spec.
+- `quadmask_spec` must be executable enough to generate the authoritative `quadmask_npy`.
+- The runner must store the planner/model JSON output as an upstream artifact.
+- Runtime or adapter code must not silently rewrite planner JSON, replace `vace_prompt`, or substitute teacher/manual text to make a run pass.
+
+### Executable Quadmask Spec
+
+The nested `quadmask_spec` must use:
+
+```text
+schema_version = e2w.quadmask_spec.v1
+```
+
+Required executable fields:
+
+```text
+operation
+primary.keyframes[].bbox_xyxy_norm1000
+primary.keyframes[].positive_points_norm1000
+affected.grid_shape
+affected.frame_ranges[].cells
+keep
+```
+
+Rules:
+
+- `quadmask_spec.operation` must equal planner `task_type`.
+- `primary.keyframes[].bbox_xyxy_norm1000` and `primary.keyframes[].positive_points_norm1000` use norm1000 image coordinates.
+- `affected.grid_shape` and `affected.frame_ranges[].cells` define the affected non-target regions used to construct Q2.
+- `keep` describes regions expected to remain unchanged and maps to Q3 semantics.
+- Old empty forms such as `{"primary": {}, "affected": {}, "keep": {}}` are not executable and do not satisfy this spec.
+
+The experimental schema `e2w.planner_output.v8_tool_augmented_grounding.v1` is not the current full-pipeline planner contract because it does not output executable `quadmask_spec` grounding.
+
+## 3. Current Canonical Runtime Contract
 
 There is one canonical runtime contract. Do not introduce parallel runtime contracts in new docs or reports.
 
@@ -38,7 +104,7 @@ No `src_video`, `source_video`, `original_video`, or `factual_source_video` fiel
 
 If an upstream stage needs to keep the original observed video for audit, provenance, or planner context, that is outside this VACE runtime contract. The VACE stage itself must consume only the first-frame-edited conditioning video as its visual condition.
 
-## 3. VACE Conditioning Video
+## 4. VACE Conditioning Video
 
 `vace_conditioning_video` is the only visual video condition passed to VACE.
 
@@ -57,7 +123,7 @@ Rationale:
 - The runtime contract should not mix factual observation with renderer conditioning.
 - Q3/keep semantics are carried by `quadmask_npy`, not by feeding original video through a separate source-video channel.
 
-## 4. Quadmask
+## 5. Quadmask
 
 `quadmask_npy` is the semantic E2W control mask.
 
@@ -86,7 +152,7 @@ Rules:
 - Shape/frame alignment must be explicit and recorded in metadata.
 - Do not collapse Q0/Q1/Q2/Q3 into a binary semantic mask.
 
-## 5. Generation Mask
+## 6. Generation Mask
 
 `generation_mask` is a unified E2W-generated full-domain mask used only to satisfy the VACE known/generate interface.
 
@@ -121,7 +187,7 @@ generation_mask_values
 generation_mask_is_full_domain: true
 ```
 
-## 6. Operation
+## 7. Operation
 
 `operation` is a required structured control input.
 
@@ -138,7 +204,7 @@ Rules:
 - `operation` must be passed as an explicit runtime input.
 - Add/remove sensitivity must be evaluated separately from prompt wording.
 
-## 7. VACE Prompt
+## 8. VACE Prompt
 
 The text input is named only:
 
@@ -177,7 +243,7 @@ Rules for both:
 - Region semantics belong to `quadmask_npy`.
 - Operation semantics belong to `operation`.
 
-## 8. Frame Count and Alignment
+## 9. Frame Count and Alignment
 
 `frame_num` is required and must match the VACE-compatible temporal length.
 
@@ -198,7 +264,7 @@ Rules:
 - Silent frame-count or resolution mismatch is not allowed.
 - Any alignment must be explicit and recorded.
 
-## 9. Renderer Output
+## 10. Renderer Output
 
 Required VACE output:
 
@@ -225,7 +291,7 @@ edited_video_path
 
 Output existence is not visual success. Non-black-frame checks are not visual success. Interface completion must be reported separately from control, visual, and research evidence.
 
-## 10. Evidence Ladder
+## 11. Evidence Ladder
 
 Every result must be reported with an evidence level:
 
@@ -247,13 +313,15 @@ Examples:
 - add/remove swap changes output consistently: CONTROL.
 - human review confirms correct object addition/removal, Q2 response, and Q3 preservation: VISUAL.
 
-## 11. What This Spec Does Not Define
+## 12. What This Spec Does Not Define
 
 This spec intentionally does not define the training-data manifest or full training contract.
 
 Do not infer training requirements from this runtime spec. Training data, cycle roles, side packets, target videos, and dataset audits will be specified separately when needed.
 
-## 12. Current Do-Not-Do Rules
+It also does not define checkpoint names, run directory names, or historical experiment schema names.
+
+## 13. Current Do-Not-Do Rules
 
 - Do not pass original/source/factual video to VACE as a runtime input.
 - Do not use `src_video` as a field name in current VACE runtime docs.
