@@ -163,10 +163,11 @@ Do not claim:
 Current understanding:
 
 - Add operation is contract-supported in schema, prompt serialization, VACE prompt validation, runner wrappers, and tests.
-- A single 0076 add-mug full pipeline artifact exists and passed machine/interface checks under older docs.
-- That 0076 run used teacher/manual artifacts, not learned VLM planner add inference.
-- Add masks in the 0076 run are executable but coarse.
-- Add visual success is not established.
+- Branch `feat/add-pipeline` adds an add INTERFACE smoke runner using real planner/model inference (`original video + user prompt -> planner/model -> vace_prompt`), Qwen Edit first-frame materialization, SAM2 on `edited_first_frame`, full-domain all-255 generation mask, and VACE.
+- Verified add INTERFACE run: `/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z` produced `edited_video.mp4` with `metadata.json` acceptance checks passing. Evidence level remains INTERFACE only; visual quality was not evaluated.
+- In that run, planner output was not manually modified and no teacher/manual `vace_prompt` was used. The planner produced valid add operation, contract-safe `vace_prompt`, and primary point grounding but no bbox; the add runner accepted point-only grounding for SAM2 and recorded `accepted_point_only_for_add_interface=true`.
+- A historical 0076 add-mug full pipeline artifact exists and passed machine/interface checks under older docs, but it used teacher/manual artifacts, not learned VLM planner add inference.
+- Add visual success and learned VACE add semantics are not established.
 
 Important historical run:
 
@@ -176,7 +177,7 @@ Important historical run:
 
 Claim boundary:
 
-> Add pipeline is contract-supported and has one teacher/manual smoke success; learned planner add and learned VACE add semantics are not established.
+> Add pipeline now has one current-spec real-planner INTERFACE smoke success plus one older teacher/manual 0076 smoke artifact; learned planner add quality, visual success, and learned VACE add semantics are not established.
 
 ---
 

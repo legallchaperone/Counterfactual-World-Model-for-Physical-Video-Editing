@@ -105,6 +105,33 @@ v8 不输出 executable quadmask spec，不是当前 v0.2 smoke chain 的 drop-i
 用户指令 -> planner -> quadmask + VACE prompt -> VACE -> edited video
 ```
 
+
+## 线 C - Add Pipeline INTERFACE Smoke
+
+`feat/add-pipeline` adds a current-spec add pipeline smoke path. Verified run:
+
+```text
+/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z
+```
+
+Evidence level: INTERFACE only.
+
+Verified acceptance facts:
+
+- Input data: `/data/cwx/E2W/data/phase1a_pexels_self_insert_v1/02_background_clean/videos_mp4/bg_000001.mp4`
+- User prompt: `Add a red mug on the table near the center of the image.`
+- `vace_prompt_source = planner_model`
+- `manual_or_teacher_vace_prompt_used = false`
+- `planner_output_manually_modified = false`
+- `accepted_point_only_for_add_interface = true` because the planner produced valid primary point grounding but no bbox.
+- `edited_first_frame.png`, `vace_conditioning_video.mp4`, `quadmask.npy`, `generation_mask.npy`, and `edited_video.mp4` exist.
+- `quadmask.npy` shape `[21,480,832]`, dtype `uint8`, values `[0,127,255]`.
+- `generation_mask.npy` shape `[21,480,832]`, dtype `uint8`, values `[255]`.
+- `source_video_passed_to_vace = false` at the E2W runtime-contract level.
+- `visual_quality_evaluated = false`.
+
+This run does not prove visual quality, learned planner add quality, or learned VACE add semantics.
+
 ## 当前阻塞点
 
 主要 blocker 不是旧 schema support 问题，而是 planner route 尚未同时满足两个下游 gate：

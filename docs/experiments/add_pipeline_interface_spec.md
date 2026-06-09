@@ -137,6 +137,7 @@ Hard constraints:
 - Do not use teacher/manual prompts for the acceptance run.
 - Do not claim learned planner add quality from this INTERFACE smoke.
 - If the planner output is weak but schema-valid enough to run, run it and record that limitation.
+- For add INTERFACE quadmask construction, planner/model output with a valid primary point but missing bbox is acceptable, because SAM2 can be prompted by point on `edited_first_frame`; record `accepted_point_only_for_add_interface=true` in metadata.
 - If the planner output is invalid for the pipeline contract, the runner may retry planner/model inference up to 3 total attempts.
 - Retry attempts must use the same original video and user prompt, optionally with a stricter system/instruction reminder to satisfy the schema; do not manually edit the model output.
 - If all 3 attempts are invalid, fail loudly and record the blocker; do not patch around it with a manual prompt.
