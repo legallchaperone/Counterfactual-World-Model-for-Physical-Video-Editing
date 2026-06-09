@@ -1,6 +1,6 @@
 # E2W 当前状态
 
-最后更新：2026-06-09T12:12:06Z UTC。
+最后更新：2026-06-09T16:00:00Z UTC。
 
 本文件是当前项目状态真源。`docs/STATUS.md` 只保留指向本文件的摘要；不要把历史 handoff、README 示例或旧 run 当作当前状态。
 
@@ -171,13 +171,25 @@ Artifact audit on 2026-06-09 found a prompt-contract gap:
 - actual `vace_prompt`: `The red mug is no longer present on the table.`
 - this is remove-residue text under `operation=add`, violating the current add prompt rule in `docs/E2W_SPEC.md`.
 
-Therefore this run remains INTERFACE/provenance smoke only. It does not prove contract-safe add prompting, visual quality, learned planner add quality, or learned VACE add semantics.
-
 Code-side follow-up on 2026-06-09:
 
 - add runner 不再用 archived v6 executable planner prompt builder；
+- `eval_vlm_planner.py` 新增 `parse_add_planner_json()` 回退路径，operation=add 时绕过 v6 schema 必填字段检查；
 - add planner split prompt 改为 current add contract，要求 model-produced `vace_prompt`、top-level `target_ref`、正向 add wording、point/bbox grounding；
 - metadata 改为记录 top-level raw `target_ref`，并记录 `vace_conditioning_video` future frames 为 zero-filled placeholders。
+
+Clean add INTERFACE run after code fix (2026-06-09):
+
+```text
+/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_v2_20260609T152335Z
+```
+
+- `add_contract_parse_fallback_used = true`（新 parser 路径已触发）
+- `vace_prompt_source = planner_model`，`manual_or_teacher_vace_prompt_used = false`
+- actual `vace_prompt`：`A cozy dining room scene with a red mug placed on the table near the center, casting a warm glow in the dimly lit room.`（正向 add wording，无 remove-residue ✅）
+- all `success_criteria` pass；`visual_quality_evaluated = false`
+
+This run is the first contract-safe add INTERFACE smoke. Visual quality and learned VACE add semantics are not established.
 
 ## 当前阻塞点
 
@@ -200,5 +212,6 @@ Code-side follow-up on 2026-06-09:
   - vace_prompt target-free。
 - [x] 3. 通过 structural gate 后，再跑一条 VACE INTERFACE smoke。
 - [x] 4. 扩大到 30 eval structural gate，确认 bridge 稳定性。
-- [ ] 5. 设计并运行 operation swap / Q0-Q2 perturb / Q3 preservation CONTROL 验收。
+- [x] 5a. 实现 CONTROL 验收工具 `tools/run_control_perturbation_test.py`（operation_swap / q0_suppressed / q0_shifted / q3_preservation 四项扰动）。
+- [ ] 5b. 等 VACE retrain 完成后，用新 checkpoint 运行四项 CONTROL 扰动测试。
 - [ ] 6. 人工或模型评审 remove + add 输出，达到 VISUAL 证据后再 package/report。
