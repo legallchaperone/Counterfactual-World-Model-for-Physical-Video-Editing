@@ -6,7 +6,8 @@ Given an observed video and a user intervention such as "remove the object" or "
 
 ```text
 user intervention
-→ planner/model output
+→ v8 planner/model output
+→ grounding bridge
 → counterfactual first frame
 → causal-region quadmask
 → operation-conditioned video renderer
@@ -48,6 +49,17 @@ This means the video renderer should not receive the original video as a hidden 
 
 ## Runtime Contract in One Screen
 
+The current planner contract is v8:
+
+```text
+target_ref
+edit_type
+counterfactual_state
+if_removed
+```
+
+The grounding bridge turns `target_ref` into `quadmask_npy`; `counterfactual_state` and `if_removed` become the basis for `vace_prompt`.
+
 The current VACE runtime input contract is:
 
 ```text
@@ -84,8 +96,9 @@ See `docs/E2W_SPEC.md` for the precise rules.
 
 See `STATUS.md` for the latest details. Short version:
 
-- The strict executable planner path for remove is still not fully through downstream gates.
-- The v8 planner-text experiments are much better at structured text, but do not yet provide executable quadmask grounding.
+- v8 is the current correct planner design.
+- v6/v7 executable-planner artifacts are archived references only, not current baselines.
+- The main blocker is making the v8 grounding bridge and runtime adapter conform to the current spec.
 - The VACE control-branch training path is separate and still needs corrected real training plus control/visual validation.
 - The add pipeline now has an **INTERFACE-level** smoke success.
 

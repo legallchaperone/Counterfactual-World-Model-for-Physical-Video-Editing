@@ -22,66 +22,78 @@ E2W is not a generic video editing benchmark, not pure text-to-video generation,
 The current compliant planner output schema is:
 
 ```text
-e2w.planner_io.v6_executable.v1
+e2w.planner_output.v8_tool_augmented_grounding.v1
 ```
 
-The planner receives the original observed video, the user add/remove request, and any upstream context needed for provenance or audit. It must return one complete JSON object that can be validated and mapped into the current E2W runtime contract.
+The planner receives the original observed video, the user remove request, and any upstream context needed for provenance or audit. It must return one complete JSON object that describes the target and the target-free counterfactual state. Grounding, first-frame edit, and renderer preparation happen downstream from this planner JSON.
 
 Required planner top-level keys:
 
 ```text
-schema_version
-video_id
-task_type
-edit_prompt
-target_objects
-protected_objects
-event_summary
-physical_causal_chain
-counterfactual_expectation
-quadmask_spec
-quality_flags
+target_ref
+edit_type
+counterfactual_state
+if_removed
 ```
 
 Rules:
 
-- `schema_version` must be `e2w.planner_io.v6_executable.v1`.
-- `task_type` must be exactly `remove` or `add`.
-- `task_type` must equal the downstream runtime `operation`.
-- `counterfactual_expectation.if_removed` is the remove-side source for `vace_prompt` and must satisfy the remove prompt rules in this spec.
-- `counterfactual_expectation.if_added` is the add-side edited-scene description source and must satisfy the add prompt rules in this spec.
-- `quadmask_spec` must be executable enough to generate the authoritative `quadmask_npy`.
+- The schema version is `e2w.planner_output.v8_tool_augmented_grounding.v1`.
+- `edit_type` must be exactly `remove`.
+- `target_ref` must be a concise visual reference to the removed target object.
+- `counterfactual_state` must contain exactly these non-empty fields:
+  - `fill_type`
+  - `surface`
+  - `lighting`
+  - `shadow`
+  - `temporal`
+  - `interaction`
+  - `geometry`
+- `fill_type` must be one of:
+  - `background_continuation`
+  - `occlusion_reveal`
+  - `contact_transition`
+  - `fluid_deformation`
+  - `object_absence`
+- `if_removed` must be a target-free positive declarative summary synthesized from `counterfactual_state`.
+- `counterfactual_state` and `if_removed` must not mention the removed target name, aliases, visible target parts, target material/color words, or negative wording such as `no <target>`, `without <target>`, `<target> is removed`, `missing`, `gone`, `absent`, `no longer present`, or `where the target was`.
 - The runner must store the planner/model JSON output as an upstream artifact.
-- Runtime or adapter code must not silently rewrite planner JSON, replace `vace_prompt`, or substitute teacher/manual text to make a run pass.
+- Runtime or adapter code must not silently rewrite planner JSON, replace planner text, or substitute teacher/manual text to make a run pass.
 
-### Executable Quadmask Spec
+### Planner-to-Runtime Mapping
 
-The nested `quadmask_spec` must use:
-
-```text
-schema_version = e2w.quadmask_spec.v1
-```
-
-Required executable fields:
+The current planner does not output `quadmask_spec` directly. The downstream grounding bridge must derive runtime inputs from planner output as follows:
 
 ```text
-operation
-primary.keyframes[].bbox_xyxy_norm1000
-primary.keyframes[].positive_points_norm1000
-affected.grid_shape
-affected.frame_ranges[].cells
-keep
+planner.target_ref
+  -> grounding target for GroundingDINO/SAM2 or an equivalent grounding stack
+  -> quadmask_npy
+
+planner.counterfactual_state + planner.if_removed
+  -> vace_prompt
+
+planner.edit_type
+  -> operation
 ```
 
 Rules:
 
-- `quadmask_spec.operation` must equal planner `task_type`.
-- `primary.keyframes[].bbox_xyxy_norm1000` and `primary.keyframes[].positive_points_norm1000` use norm1000 image coordinates.
-- `affected.grid_shape` and `affected.frame_ranges[].cells` define the affected non-target regions used to construct Q2.
-- `keep` describes regions expected to remain unchanged and maps to Q3 semantics.
-- Old empty forms such as `{"primary": {}, "affected": {}, "keep": {}}` are not executable and do not satisfy this spec.
+- `target_ref` is used only to ground the removed target and build the semantic `quadmask_npy`.
+- The generated `quadmask_npy` must still satisfy the Quadmask section of this spec.
+- `vace_prompt` must be produced from the planner output and must pass the remove prompt rules in this spec.
+- The downstream runtime `operation` must be `remove`.
+- `generation_mask` remains full-domain all-generate and must not be derived as a semantic local edit mask.
+- The bridge must record enough metadata to prove planner JSON, grounding output, `quadmask_npy`, `vace_prompt`, and VACE runtime inputs are connected.
 
-The experimental schema `e2w.planner_output.v8_tool_augmented_grounding.v1` is not the current full-pipeline planner contract because it does not output executable `quadmask_spec` grounding.
+### Archived Planner Schemas
+
+The older executable planner schema is archived for historical comparison only:
+
+```text
+e2w.planner_io.v6_executable.v1
+```
+
+Do not use `e2w.planner_io.v6_executable.v1`, v6, or v7 artifacts as current planner baselines. They may be cited only as historical evidence.
 
 ## 3. Current Canonical Runtime Contract
 
@@ -229,7 +241,7 @@ Rules for remove:
 - Must be target-free.
 - Must not mention target names, aliases, visible target subparts, or target material terms.
 - Must not use remove/delete/erase wording.
-- Must not say `without <target>`, `no <target>`, `no longer present`, or `where <target> was`.
+- Must not say `without <target>`, `no <target>`, `no longer present`, `missing`, `gone`, `absent`, or `where <target> was`.
 
 Rules for add:
 
@@ -329,4 +341,5 @@ It also does not define checkpoint names, run directory names, or historical exp
 - Do not use backend generation masks to encode E2W semantics.
 - Do not introduce multiple generation-mask modes in current spec.
 - Do not claim visual/control success from runtime completion.
+- Do not use v6/v7 executable-planner artifacts as current planner baselines.
 - Do not revive archived docs as current constraints.

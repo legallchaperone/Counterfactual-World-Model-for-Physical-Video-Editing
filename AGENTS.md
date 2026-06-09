@@ -47,7 +47,33 @@ Reviewer boundary:
 
 > VOID's unit of supervision is a deleted video; E2W's unit of supervision is an intervention-conditioned counterfactual contract linking planner state, causal regions, operation control, and rendered video.
 
-## 2. Current VACE Runtime Contract
+## 2. Current Planner Contract
+
+The current correct planner design is v8:
+
+```text
+e2w.planner_output.v8_tool_augmented_grounding.v1
+```
+
+Planner output fields:
+
+```text
+target_ref
+edit_type
+counterfactual_state
+if_removed
+```
+
+Rules:
+
+- Treat v8 as the current planner baseline.
+- `counterfactual_state` must contain the current spec fields: `fill_type`, `surface`, `lighting`, `shadow`, `temporal`, `interaction`, and `geometry`.
+- `if_removed` must be target-free and must not use negative/remove-residue wording.
+- `target_ref` feeds the grounding bridge; the planner does not directly output current `quadmask_npy`.
+- The grounding bridge must produce `quadmask_npy` and current-spec runtime metadata.
+- Do not use v6/v7/v0.2 executable-planner artifacts as current planner baselines. They are archived historical references only.
+
+## 3. Current VACE Runtime Contract
 
 The current VACE runtime inputs are exactly:
 
@@ -73,7 +99,7 @@ Hard rules:
 
 Do not introduce parallel runtime contracts in new docs, tests, or reports.
 
-## 3. Quadmask Semantics
+## 4. Quadmask Semantics
 
 `quadmask_npy` is the authoritative semantic control mask:
 
@@ -97,7 +123,7 @@ Rules:
 - Any frame/shape alignment must be explicit and recorded.
 - Never collapse Q0/Q1/Q2/Q3 into a binary semantic mask.
 
-## 4. Evidence Ladder
+## 5. Evidence Ladder
 
 Classify every result by evidence level:
 
@@ -119,7 +145,7 @@ Examples:
 - add/remove swap changes output consistently: CONTROL.
 - human review confirms correct object addition/removal, Q2 response, and Q3 preservation: VISUAL.
 
-## 5. Environment and Roots
+## 6. Environment and Roots
 
 Work from:
 
@@ -157,7 +183,7 @@ nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
 
 Never kill other users' GPU jobs.
 
-## 6. Validation Commands
+## 7. Validation Commands
 
 For doc/spec-only changes, verify references and git diff; tests are usually not required unless you changed executable contracts.
 
@@ -171,7 +197,7 @@ cd /home/cwx/E2W
 
 If a test fails, fix the data, prompt, parser, planner, runner, or test expectation to match the accepted spec. Do not weaken tests merely to make a run pass.
 
-## 7. Research Hygiene
+## 8. Research Hygiene
 
 Do not:
 

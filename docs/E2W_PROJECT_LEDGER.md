@@ -2,7 +2,7 @@
 
 > **Owner / update convention:** This file is the assistant-maintained continuity ledger for E2W. The user asked that Hermes maintains it. Treat it as a project state ledger, not a scratchpad. Update it only when a durable fact, boundary decision, verified artifact, or next-step priority changes. Do not use it for transient task notes.
 
-Last updated: 2026-06-08T17:25:00Z
+Last updated: 2026-06-09T10:05:00Z
 Maintainer skill: `e2w-project-ledger`
 Canonical repo: `ssh cwx:/home/cwx/E2W`
 Current spec: `/home/cwx/E2W/docs/E2W_SPEC.md`
@@ -35,7 +35,36 @@ Reviewer one-liner:
 
 ---
 
-## 2. Current Runtime Boundary
+## 2. Current Planner and Runtime Boundary
+
+The user clarified on 2026-06-09 that v8 is the correct planner design and that v7/v0.2 executable-planner artifacts should be archived as historical references, not treated as current baselines.
+
+Current planner contract:
+
+```text
+e2w.planner_output.v8_tool_augmented_grounding.v1
+```
+
+Required planner fields:
+
+```text
+target_ref
+edit_type
+counterfactual_state
+if_removed
+```
+
+The v8 planner is intentionally text/state-first. It does not directly output executable `quadmask_spec`; instead, the current intended pipeline is:
+
+```text
+original video + user remove request
+-> v8 planner JSON
+-> target_ref grounding with GroundingDINO/SAM2 or equivalent
+-> quadmask_npy
+-> vace_prompt from counterfactual_state / if_removed
+-> first-frame-edited vace_conditioning_video
+-> current six-input VACE runtime
+```
 
 The current VACE runtime contract is intentionally narrow.
 
@@ -60,6 +89,7 @@ Durable boundary decisions:
 - Region semantics live only in `quadmask_npy`.
 - Text input is named only `vace_prompt`.
 - Training manifests / target videos / side packets / cycle roles are not defined by the current runtime spec.
+- v6/v7 executable-planner schemas and artifacts are archived references only, not current planner baselines.
 
 ---
 
@@ -106,14 +136,16 @@ head before cleanup: 918ca7c A13 加入 first frame edit，完善端到端 pipel
 
 Current understanding:
 
-- The executable planner route supports full executable schema but strict remove gates remain low.
-- The planner-text route is strong on parse/schema/target-free counterfactual text but does not output executable quadmask grounding.
-- Text-planner success should not be treated as downstream renderer success.
+- v8 is the current correct planner design.
+- v8 is strong on parse/schema/target-free counterfactual text and should be the basis for current planner work.
+- The remaining main gap is not returning to v7, but making the v8 grounding bridge and runtime adapter conform to `docs/E2W_SPEC.md`.
+- v7/v0.2 executable-planner artifacts are archived historical evidence.
 
 Do not claim:
 
-- current planner can run full forward pass cleanly;
-- target-free text success implies renderer/control success.
+- v8 can run full forward pass cleanly until the grounding bridge and current VACE runtime mapping are structurally verified;
+- target-free text success alone implies renderer/control success;
+- v7/v0.2 is the current planner baseline.
 
 ### B. VACE / Quadmask Control
 
@@ -165,7 +197,8 @@ Current understanding:
 - Add operation is contract-supported in schema, prompt serialization, VACE prompt validation, runner wrappers, and tests.
 - Branch `feat/add-pipeline` adds an add INTERFACE smoke runner using real planner/model inference (`original video + user prompt -> planner/model -> vace_prompt`), Qwen Edit first-frame materialization, SAM2 on `edited_first_frame`, full-domain all-255 generation mask, and VACE.
 - Verified add INTERFACE run: `/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z` produced `edited_video.mp4` with `metadata.json` acceptance checks passing. Evidence level remains INTERFACE only; visual quality was not evaluated.
-- In that run, planner output was not manually modified and no teacher/manual `vace_prompt` was used. The planner produced valid add operation, contract-safe `vace_prompt`, and primary point grounding but no bbox; the add runner accepted point-only grounding for SAM2 and recorded `accepted_point_only_for_add_interface=true`.
+- Follow-up artifact audit on 2026-06-09 found the run metadata's actual add `vace_prompt` contains remove-residue text: `The red mug is no longer present on the table.` This violates the current add prompt rule in `docs/E2W_SPEC.md`. Treat the run as add INTERFACE/provenance smoke only, not as contract-safe add prompt STRUCTURAL evidence.
+- In that run, planner output was not manually modified and no teacher/manual `vace_prompt` was used. The planner produced valid add operation and primary point grounding but no bbox; the add runner accepted point-only grounding for SAM2 and recorded `accepted_point_only_for_add_interface=true`.
 - A historical 0076 add-mug full pipeline artifact exists and passed machine/interface checks under older docs, but it used teacher/manual artifacts, not learned VLM planner add inference.
 - Add visual success and learned VACE add semantics are not established.
 
@@ -177,7 +210,7 @@ Important historical run:
 
 Claim boundary:
 
-> Add pipeline now has one current-spec real-planner INTERFACE smoke success plus one older teacher/manual 0076 smoke artifact; learned planner add quality, visual success, and learned VACE add semantics are not established.
+> Add pipeline now has one real-planner INTERFACE/provenance smoke success plus one older teacher/manual 0076 smoke artifact. The current real-planner add run has an add prompt-contract gap, so learned planner add quality, contract-safe add prompting, visual success, and learned VACE add semantics are not established.
 
 ---
 
@@ -203,18 +236,17 @@ Interface success alone must never be reported as visual/control/research succes
 The next meaningful E2W proof should be small and controlled:
 
 ```text
-Use paired/self-insertion anchors.
-Train only the relevant E2W control path.
-Evaluate:
-  - overfit loss decreases;
-  - Q3 preservation remains high;
-  - operation swap add↔remove changes output/context appropriately;
-  - Q0 perturbation changes primary edit;
-  - Q2 perturbation changes affected consequences;
-  - binary-only / no-counterfactual-state ablations are worse.
+Use v8 planner outputs.
+Verify the grounding bridge and current runtime mapping:
+  - planner JSON parse/schema passes;
+  - target_ref grounds to usable masks;
+  - quadmask_npy has exact values and shape;
+  - generation_mask is full-domain all-255;
+  - vace_prompt is target-free and produced from v8 state;
+  - metadata links planner JSON -> grounding -> quadmask -> VACE inputs.
 ```
 
-Avoid long full-pipeline runs until this spine is proven.
+Avoid long full-pipeline runs until this v8 structural spine is proven.
 
 ---
 
@@ -229,6 +261,7 @@ Avoid long full-pipeline runs until this spine is proven.
 7. Do not treat `edited_video` existence, non-black frames, or signal consumption metadata as visual success.
 8. Do not claim learned add pipeline from the 0076 add-mug teacher/manual run.
 9. Do not revive archived docs as current constraints.
+10. Do not use v6/v7 executable-planner artifacts as current baselines.
 
 ---
 
