@@ -57,6 +57,19 @@ class V03QuadVaceContractTests(unittest.TestCase):
         self.assertTrue(info["changed"])
         self.assertEqual(info["frame_index_mapping_first_last"], [0, 1])
 
+    def test_generation_mask_default_mode_is_full_domain(self) -> None:
+        quad = np.array(
+            [
+                [[255, 0], [63, 127]],
+                [[255, 255], [0, 127]],
+            ],
+            dtype=np.uint8,
+        )
+        mask = v03.generation_mask_from_quadmask(quad, "full-domain")
+        self.assertEqual(mask.shape, quad.shape)
+        self.assertEqual(mask.dtype, np.uint8)
+        self.assertEqual(sorted(int(x) for x in np.unique(mask)), [255])
+
     def test_quad_runner_command_contains_required_v03_inputs(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
             tmp_path = Path(tmp)
@@ -118,11 +131,9 @@ class V03QuadVaceContractTests(unittest.TestCase):
                 str(run_dir),
             ]
             meta = {"frame_count": 1, "height": 2, "width": 2, "fps": 16.0}
-            full_domain_generation_mask = np.full((1, 2, 2), 255, dtype=np.uint8)
             with (
                 mock.patch.object(sys, "argv", argv),
                 mock.patch.object(v03, "video_meta", return_value=meta),
-                mock.patch.object(v03, "generation_mask_from_quadmask", return_value=full_domain_generation_mask),
             ):
                 v03.main()
 
@@ -130,6 +141,10 @@ class V03QuadVaceContractTests(unittest.TestCase):
             self.assertEqual(payload["status"], "prepared")
             self.assertTrue(payload["quadmask_passed_to_backend_command"])
             self.assertFalse(payload["quadmask_consumed_by_backend"])
+            self.assertEqual(payload["generation_mask_mode"], "full-domain")
+            self.assertEqual(payload["generation_mask_values"], [255])
+            self.assertTrue(payload["generation_mask_is_full_domain"])
+            self.assertFalse(payload["generation_mask_encodes_quadmask_semantics"])
 
 
 if __name__ == "__main__":

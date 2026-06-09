@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quadmask-npy", type=Path, required=True)
     parser.add_argument("--operation", choices=["remove", "add"], required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--generation-mask-mode", choices=["quadmask-editable", "future-full-frame"], default="quadmask-editable")
+    parser.add_argument("--generation-mask-mode", choices=["full-domain", "quadmask-editable", "future-full-frame"], default="full-domain")
     parser.add_argument("--align-quadmask", choices=["error", "nearest"], default="error")
     parser.add_argument("--cuda-visible-devices")
     parser.add_argument("--python", type=Path, default=DEFAULT_PYTHON)
@@ -117,9 +118,22 @@ def align_quadmask(quad: np.ndarray, meta: dict[str, Any], mode: str) -> tuple[n
 
 
 def generation_mask_from_quadmask(quad: np.ndarray, mode: str) -> np.ndarray:
+    if mode == "full-domain":
+        return np.full_like(quad, 255, dtype=np.uint8)
     if mode == "quadmask-editable":
+        warnings.warn(
+            "quadmask-editable generation masks are legacy v0.3 behavior and encode quadmask semantics; "
+            "current E2W runs should use full-domain generation masks.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return np.where(quad != 255, 255, 0).astype(np.uint8)
     if mode == "future-full-frame":
+        warnings.warn(
+            "future-full-frame generation masks are legacy v0.3 behavior and are not the current full-domain E2W contract.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         out = np.full_like(quad, 255, dtype=np.uint8)
         out[0] = 0
         return out
@@ -184,7 +198,7 @@ def main() -> None:
     aligned_path = args.run_dir / "quadmask_aligned.npy"
     np.save(aligned_path, aligned)
     generation_mask = generation_mask_from_quadmask(aligned, args.generation_mask_mode)
-    generation_mask_path = args.run_dir / "vace_generation_mask_from_quadmask.mp4"
+    generation_mask_path = args.run_dir / "vace_generation_mask.mp4"
     write_gray_video(generation_mask_path, generation_mask, meta["fps"])
     prompt_path = args.run_dir / "prompt.txt"
     write_text(prompt_path, args.prompt + "\n")
@@ -234,6 +248,9 @@ def main() -> None:
         "quadmask_semantics": {"0": "primary", "63": "primary_affected_overlap", "127": "affected", "255": "keep"},
         "generation_mask_mode": args.generation_mask_mode,
         "generation_mask_semantics": "255/generate, 0/keep",
+        "generation_mask_values": sorted(int(x) for x in np.unique(generation_mask)),
+        "generation_mask_is_full_domain": sorted(int(x) for x in np.unique(generation_mask)) == [255],
+        "generation_mask_encodes_quadmask_semantics": args.generation_mask_mode == "quadmask-editable",
         "video_meta": meta,
         "quadmask_source": str(args.quadmask_npy),
         "quadmask_source_resolved": str(args.quadmask_npy.resolve()),
