@@ -16,6 +16,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from e2w_vace_control_branch import (
+    E2WGatedCausalControlBranch,
+    V03_PACKED_CONTEXT_CHANNELS,
+)
+
 
 E2W_QUAD_VACE_IN_DIM = 416
 LEGACY_VACE_IN_DIM = 96
@@ -127,6 +132,52 @@ def install_quad_vace_controls(model: nn.Module, operation: Operation | str) -> 
     install_operation_embedding(model, operation)
 
 
+def install_trained_control_branch(
+    model: nn.Module,
+    *,
+    checkpoint_path: str | Path,
+    operation: Operation | str,
+    inverse_operation: Operation | str | None = None,
+) -> dict[str, Any]:
+    operation = operation if operation in {"remove", "add"} else operation_to_id(operation)
+    if operation not in {"remove", "add"}:
+        raise VACEQuadI2VError(f"unsupported operation: {operation!r}")
+    old_conv = getattr(model, "vace_patch_embedding", None)
+    if not isinstance(old_conv, nn.Conv3d):
+        raise VACEQuadI2VError("model.vace_patch_embedding must be nn.Conv3d")
+    if int(old_conv.in_channels) != LEGACY_VACE_IN_DIM:
+        raise VACEQuadI2VError(
+            f"trained control branch must be installed before patch expansion; got in_channels={old_conv.in_channels}"
+        )
+
+    checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+    payload = torch.load(checkpoint_path, map_location="cpu")
+    if not isinstance(payload, dict) or "branch_state_dict" not in payload:
+        raise VACEQuadI2VError(f"checkpoint missing branch_state_dict: {checkpoint_path}")
+
+    device = next(model.parameters()).device
+    dtype = next(model.parameters()).dtype
+    branch = E2WGatedCausalControlBranch(old_conv)
+    branch.load_state_dict(payload["branch_state_dict"])
+    branch.to(device=device, dtype=dtype)
+    branch.residual_gate.data = branch.residual_gate.data.to(device=device, dtype=torch.float32)
+    branch.eval()
+
+    model._e2w_control_branch = branch  # type: ignore[attr-defined]
+    model._e2w_operation = operation  # type: ignore[attr-defined]
+    model._e2w_inverse_operation = inverse_operation or ("add" if operation == "remove" else "remove")  # type: ignore[attr-defined]
+    model.forward_vace = types.MethodType(_forward_vace_with_trained_control_branch, model)
+    return {
+        "control_branch_checkpoint": str(checkpoint_path),
+        "control_branch_checkpoint_loaded": True,
+        "trained_control_branch_used": True,
+        "control_branch_step": int(payload.get("step", -1)),
+        "control_branch_gate": float(branch.gate().detach().float().item()),
+        "control_branch_installed_in_forward_vace": True,
+        "vace_context_channels": V03_PACKED_CONTEXT_CHANNELS,
+    }
+
+
 def _forward_vace_with_operation(self: nn.Module, x: Any, vace_context: list[torch.Tensor], seq_len: int, kwargs: dict[str, Any]):
     c = [self.vace_patch_embedding(u.unsqueeze(0)) for u in vace_context]
     c = [u.flatten(2).transpose(1, 2) for u in c]
@@ -142,6 +193,43 @@ def _forward_vace_with_operation(self: nn.Module, x: Any, vace_context: list[tor
         op = torch.full((c.size(0),), int(operation_id), dtype=torch.long, device=c.device)
         op_embedding = self.e2w_operation_embedding(op).to(dtype=c.dtype)
         c = c + op_embedding[:, None, :]
+
+    new_kwargs = dict(x=x)
+    new_kwargs.update(kwargs)
+    for block in self.vace_blocks:
+        c = block(c, **new_kwargs)
+    return torch.unbind(c)[:-1]
+
+
+def _forward_vace_with_trained_control_branch(
+    self: nn.Module,
+    x: Any,
+    vace_context: list[torch.Tensor],
+    seq_len: int,
+    kwargs: dict[str, Any],
+):
+    embedded = []
+    operation = getattr(self, "_e2w_operation", "add")
+    inverse_operation = getattr(self, "_e2w_inverse_operation", None)
+    branch = getattr(self, "_e2w_control_branch", None)
+    if branch is None:
+        raise VACEQuadI2VError("trained control branch was not attached to model")
+    for u in vace_context:
+        if int(u.shape[0]) != V03_PACKED_CONTEXT_CHANNELS:
+            raise VACEQuadI2VError(f"trained branch expected 416-channel packed context, got {list(u.shape)}")
+        composed = branch.compose_with_legacy(
+            u.unsqueeze(0),
+            operation=operation,
+            inverse_operation=inverse_operation,
+        )["context"]
+        embedded.append(composed)
+    c = [u.flatten(2).transpose(1, 2) for u in embedded]
+    c = torch.cat(
+        [
+            torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))], dim=1)
+            for u in c
+        ]
+    )
 
     new_kwargs = dict(x=x)
     new_kwargs.update(kwargs)

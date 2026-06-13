@@ -45,6 +45,40 @@ class V03QuadVaceContractTests(unittest.TestCase):
             self.assertEqual(info["quadmask_value_counts"], {"0": 1, "63": 1, "127": 1, "255": 1})
             self.assertNotIn("quadmask_values", info)
 
+    def test_trained_control_branch_checkpoint_installs_forward_patch(self) -> None:
+        import torch
+        from e2w_vace_control_branch import E2WGatedCausalControlBranch
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.vace_patch_embedding = torch.nn.Conv3d(96, 4, kernel_size=1)
+
+            def forward_vace(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            tmp_path = Path(tmp)
+            model = FakeModel()
+            branch = E2WGatedCausalControlBranch(model.vace_patch_embedding)
+            branch.residual_gate.data.fill_(0.125)
+            checkpoint = tmp_path / "latest.pt"
+            torch.save({"step": 200, "branch_state_dict": branch.state_dict()}, checkpoint)
+
+            info = quad_i2v.install_trained_control_branch(
+                model,
+                checkpoint_path=checkpoint,
+                operation="add",
+            )
+
+        self.assertTrue(info["control_branch_checkpoint_loaded"])
+        self.assertTrue(info["trained_control_branch_used"])
+        self.assertTrue(info["control_branch_installed_in_forward_vace"])
+        self.assertEqual(info["control_branch_step"], 200)
+        self.assertAlmostEqual(info["control_branch_gate"], 0.125)
+        self.assertEqual(info["vace_context_channels"], 416)
+        self.assertIsNotNone(getattr(model, "_e2w_control_branch", None))
+
     def test_quadmask_alignment_requires_explicit_mode(self) -> None:
         quad = np.zeros((2, 4, 6), dtype=np.uint8)
         meta = {"frame_count": 3, "height": 2, "width": 3}

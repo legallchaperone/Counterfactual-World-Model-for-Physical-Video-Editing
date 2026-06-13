@@ -83,6 +83,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vace-size", default="480p")
     p.add_argument("--vace-sample-steps", type=int, default=8)
     p.add_argument("--vace-base-seed", type=int, default=2025)
+    p.add_argument("--control-branch-checkpoint", type=Path)
     p.add_argument("--cuda-visible-devices", default=os.environ.get("CUDA_VISIBLE_DEVICES"))
     p.add_argument("--skip-vace", action="store_true", help="debug only: do not use for acceptance")
     return p.parse_args()
@@ -376,12 +377,16 @@ def main() -> int:
         str(args.vace_sample_steps),
         "--offload_model",
     ]
+    if args.control_branch_checkpoint:
+        vace_cmd.extend(["--control_branch_checkpoint", str(args.control_branch_checkpoint)])
     write_json(run_dir / "run_command.json", {"vace_cmd": vace_cmd, "cwd": str(ROOT)})
     if args.skip_vace:
         raise RuntimeError("--skip-vace is debug-only and cannot satisfy acceptance criteria")
     proc = run_cmd(vace_cmd, cwd=ROOT, env={"CUDA_VISIBLE_DEVICES": args.cuda_visible_devices}, log_path=run_dir / "vace_command_result.json")
     if proc.returncode != 0:
         raise RuntimeError(f"VACE command failed rc={proc.returncode}; see {run_dir / 'vace_command_result.json'}")
+    context_info_path = run_dir / "vace_backend" / "e2w_quad_context.json"
+    context_info = json.loads(context_info_path.read_text(encoding="utf-8")) if context_info_path.exists() else {}
 
     metadata = {
         "evidence_level": "INTERFACE",
@@ -412,6 +417,12 @@ def main() -> int:
         "sam2": sam2_info,
         "quadmask": quad_meta,
         "generation_mask": gen_meta,
+        "control_branch": context_info,
+        "control_branch_checkpoint_loaded": bool(context_info.get("control_branch_checkpoint_loaded")),
+        "trained_control_branch_used": bool(context_info.get("trained_control_branch_used")),
+        "control_branch_step": context_info.get("control_branch_step"),
+        "control_branch_gate": context_info.get("control_branch_gate"),
+        "control_branch_installed_in_forward_vace": bool(context_info.get("control_branch_installed_in_forward_vace")),
         "vace_runtime_inputs": {
             "vace_conditioning_video": str(vace_conditioning),
             "quadmask_npy": str(quadmask_npy),

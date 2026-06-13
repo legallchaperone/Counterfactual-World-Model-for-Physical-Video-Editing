@@ -69,6 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vace-sample-steps", type=int, default=8)
     parser.add_argument("--vace-base-seed", type=int, default=2025)
     parser.add_argument("--vace-fps", type=float, default=6.0)
+    parser.add_argument("--control-branch-checkpoint", type=Path)
     parser.add_argument("--skip-vace", action="store_true")
     parser.add_argument("--qwen-image-edit-checkpoint", type=Path, default=DEFAULT_QWEN_IMAGE_EDIT)
     parser.add_argument("--qwen-image-edit-seed", type=int, default=2025)
@@ -283,6 +284,39 @@ def write_video_from_frames(
             writer.write(frame)
     finally:
         writer.release()
+
+
+def write_vace_conditioning_video(
+    edited_first_frame: Path,
+    out_path: Path,
+    *,
+    frame_count: int,
+    width: int,
+    height: int,
+    fps: float,
+) -> dict[str, Any]:
+    image = cv2.imread(str(edited_first_frame), cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError(f"failed to read edited first frame: {edited_first_frame}")
+    if image.shape[:2] != (height, width):
+        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"failed to open video writer: {out_path}")
+    try:
+        zero = np.zeros_like(image)
+        for idx in range(frame_count):
+            writer.write(image if idx == 0 else zero)
+    finally:
+        writer.release()
+    return {
+        "conditioning_strategy": "edited_first_frame_plus_zero_filled_future_frames",
+        "frame_0_is_edited_first_frame": True,
+        "future_frames_are_zero_filled": True,
+        "future_frames_source_video_used": False,
+        "frame_count": frame_count,
+    }
 
 
 def write_gray_video(masks: np.ndarray, out_path: Path, fps: float) -> None:
@@ -513,6 +547,8 @@ def run_vace(
         str(args.vace_sample_steps),
         "--offload_model",
     ]
+    if args.control_branch_checkpoint:
+        command.extend(["--control_branch_checkpoint", str(args.control_branch_checkpoint.resolve())])
     save_dir.mkdir(parents=True, exist_ok=True)
     write_json(
         save_dir / "vace_backend_adapter_command.json",
@@ -541,6 +577,9 @@ def run_vace(
     if proc.returncode != 0:
         info["error"] = f"VACE command failed with return code {proc.returncode}"
         return None, info
+    context_info_path = save_dir / "e2w_quad_context.json"
+    if context_info_path.exists():
+        info["context_info"] = json.loads(context_info_path.read_text(encoding="utf-8"))
     return str(output_video), info
 
 
@@ -717,12 +756,13 @@ def main() -> int:
                 np.save(vace_quadmask_path, vace_quadmask)
                 np.save(vace_generation_mask_npy_path, vace_generation_mask)
                 write_gray_video(vace_generation_mask, vace_generation_mask_video_path, args.vace_fps)
-                write_video_from_frames(
-                    frames,
+                conditioning_metadata = write_vace_conditioning_video(
+                    Path(edited_frame_path),
                     vace_conditioning_video_path,
-                    args.vace_fps,
-                    target_frame_count=vace_frame_count,
-                    first_frame_override=Path(edited_frame_path),
+                    frame_count=vace_frame_count,
+                    width=width,
+                    height=height,
+                    fps=args.vace_fps,
                 )
                 vace_output_path, vace_info = run_vace(
                     args,
@@ -747,9 +787,22 @@ def main() -> int:
                         },
                         "vace_runtime_input_metadata": {
                             "vace_conditioning_video_first_frame": edited_frame_path,
+                            "vace_conditioning_video": conditioning_metadata,
                             "quadmask": mask_metadata(vace_quadmask),
                             "generation_mask": generation_mask_metadata(vace_generation_mask),
                         },
+                    }
+                )
+                context_info = vace_info.get("context_info") if isinstance(vace_info.get("context_info"), dict) else {}
+                vace_info.update(
+                    {
+                        "control_branch_checkpoint_loaded": bool(context_info.get("control_branch_checkpoint_loaded")),
+                        "trained_control_branch_used": bool(context_info.get("trained_control_branch_used")),
+                        "control_branch_step": context_info.get("control_branch_step"),
+                        "control_branch_gate": context_info.get("control_branch_gate"),
+                        "control_branch_installed_in_forward_vace": bool(
+                            context_info.get("control_branch_installed_in_forward_vace")
+                        ),
                     }
                 )
             elif vace_prompt_valid and args.skip_vace:

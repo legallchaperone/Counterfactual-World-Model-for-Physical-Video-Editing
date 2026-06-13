@@ -17,6 +17,7 @@ from e2w_vace_quad_i2v import (  # noqa: E402
     generate_with_quad_context,
     install_quad_latent_hook,
     install_quad_vace_controls,
+    install_trained_control_branch,
     operation_to_id,
     write_context_debug,
 )
@@ -45,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--negative_prompt", default="")
     parser.add_argument("--offload_model", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--t5_cpu", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--control_branch_checkpoint", type=Path)
     return parser.parse_args()
 
 
@@ -90,7 +92,20 @@ def main() -> int:
         use_usp=False,
         t5_cpu=args.t5_cpu,
     )
-    install_quad_vace_controls(wan_vace.model, args.operation)
+    control_branch_info = {
+        "control_branch_checkpoint": None,
+        "control_branch_checkpoint_loaded": False,
+        "trained_control_branch_used": False,
+        "control_branch_installed_in_forward_vace": False,
+    }
+    if args.control_branch_checkpoint:
+        control_branch_info = install_trained_control_branch(
+            wan_vace.model,
+            checkpoint_path=args.control_branch_checkpoint,
+            operation=args.operation,
+        )
+    else:
+        install_quad_vace_controls(wan_vace.model, args.operation)
 
     logging.info("Preparing source conditioning video, generation mask, and quadmask context.")
     src_video, src_mask, src_ref_images = wan_vace.prepare_source(
@@ -117,6 +132,7 @@ def main() -> int:
             "src_video": args.src_video,
             "generation_mask": args.generation_mask,
             "quadmask_npy": args.quadmask_npy,
+            **control_branch_info,
         }
     )
     save_dir = Path(args.save_dir)

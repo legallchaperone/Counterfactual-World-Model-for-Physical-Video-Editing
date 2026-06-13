@@ -2,7 +2,7 @@
 
 > **Owner / update convention:** This file is the assistant-maintained continuity ledger for E2W. The user asked that Hermes maintains it. Treat it as a project state ledger, not a scratchpad. Update it only when a durable fact, boundary decision, verified artifact, or next-step priority changes. Do not use it for transient task notes.
 
-Last updated: 2026-06-09T13:30:00Z
+Last updated: 2026-06-13T00:00:00Z
 Maintainer skill: `e2w-project-ledger`
 Canonical repo: `ssh cwx:/home/cwx/E2W`
 Current spec: `/home/cwx/E2W/docs/E2W_SPEC.md`
@@ -84,6 +84,7 @@ Durable boundary decisions:
 - VACE runtime must not take `src_video`, `source_video`, `original_video`, or `factual_source_video` as inputs.
 - The only visual condition passed to VACE is `vace_conditioning_video`.
 - `vace_conditioning_video` must be a first-frame-edited conditioning video.
+- `vace_conditioning_video` future frames must be zero/blank placeholders; they must not copy frames from the factual source video.
 - `generation_mask` is unified full-domain generation, normally all `255` over the aligned video domain.
 - `generation_mask` carries no semantic edit meaning.
 - Region semantics live only in `quadmask_npy`.
@@ -163,8 +164,10 @@ Current understanding:
   - `vace_prompt` naming is required by the training script;
   - Q3 latent MSE loss is present.
 - The historical real 14B overfit run `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_20260604` predates those fixes. It reached `final_gate = 0.022334493696689606`, but its `metrics.jsonl` does not contain the new Q3/full-domain-mask metadata fields. Treat it as stale training evidence.
+- The corrected real 14B self-insertion overfit completed at `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_specfix_selfinsert_20260612`, after a 20-step pilot at `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_specfix_selfinsert_20260612_pilot20`. The run used real weights, 200 steps, 201 metrics rows, current-spec conditioning inputs `["edited_first_frame","quadmask","vace_prompt"]`, full-domain generation mask values `[255]`, Q3 loss weight `0.1`, nonzero gradients, and final gate `0.046739354729652405`.
 - The current branch tests verified during audit: `tests.test_v04_anchor_manifest_audit`, `tests.test_v04_control_branch_freeze`, and `tests.test_v04_control_branch_gradients` ran 19 tests OK.
-- Real evidence still required: rerun real training after the 1f17 fixes, then operation swap, quadmask perturbation, Q2 response, Q3 preservation, and ablations.
+- Evidence level is TRAINING only. Real evidence still required: connect the trained v04 branch checkpoint to VACE inference, then run operation swap, quadmask perturbation, Q2 response, Q3 preservation, and ablations.
+- On 2026-06-13, the first Physics-IQ simple-eval run under `/data/cwx/E2W/runs/physics_iq_for_simple_eval` was invalidated for remove-side visual judging: `run_counterfactual_planner_pipeline.py` wrote `vace_conditioning_video` with frame 0 edited but future frames copied from the factual source video. This explains the observed target reappearance after the first frame and violates the current conditioning-video contract. The runner was fixed to write edited frame 0 plus zero-filled future frames, and `physics_iq_for_simple_eval validate-run` now rejects runs whose conditioning future frames use source video.
 
 Do not claim:
 

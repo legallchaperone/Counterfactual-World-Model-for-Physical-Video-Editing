@@ -1,6 +1,6 @@
 # E2W 当前状态
 
-最后更新：2026-06-09T16:00:00Z UTC。
+最后更新：2026-06-13T00:00:00Z UTC。
 
 本文件是当前项目状态真源。`docs/STATUS.md` 只保留指向本文件的摘要；不要把历史 handoff、README 示例或旧 run 当作当前状态。
 
@@ -14,6 +14,8 @@
 - VACE Phase 1A control-branch 数据路线与 planner 训练路线独立，训练阶段不互相依赖。
 
 在 control / visual 验收完成前，不要继续 package/report 或声称模型已学会可控 counterfactual editing。
+
+2026-06-13 更新：首轮 Physics-IQ simple eval 的 remove 产物作废，不可用于人工视觉判断。原因是 remove runner 构造 `vace_conditioning_video` 时只替换了第 0 帧，后续帧仍来自 factual source video，导致 VACE 在第 1 帧以后重新看见本该去除的物体。当前 contract 已明确要求 `vace_conditioning_video` 为 edited first frame + zero-filled future frames；代码和 validator 已修复，需重跑 benchmark。
 
 ## 线 A - Planner 和 Grounding Bridge
 
@@ -111,7 +113,7 @@ Do not use these to decide current next actions except for historical failure an
 
 该路线独立于 planner SFT 训练，目标是训练 VACE 侧的 gated causal control branch。
 
-已核查状态（2026-06-08）：
+已核查状态（2026-06-12）：
 
 - worktree: `/home/cwx/E2W/.worktree/feat/phase1-v04-control-branch`
 - branch head: `1f17ea4 按 E2W_SPEC 修正 VACE 训练元数据`
@@ -128,11 +130,22 @@ Do not use these to decide current next actions except for historical failure an
   - 使用 `vace_prompt`；
   - 加入 Q3 latent MSE loss。
 - 历史真实 14B run `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_20260604` 在这些修正之前产生，`final_gate = 0.022334493696689606`，不能证明修正后的训练格式有效。
+- 修正后真实 14B self-insertion overfit 已完成：
+  - checkpoint: `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_specfix_selfinsert_20260612`
+  - pilot: `/data/cwx/E2W/checkpoints/v04_real_overfit_14b_specfix_selfinsert_20260612_pilot20`
+  - steps: 200，metrics rows: 201
+  - `real_weights_loaded=true`, `mock_or_toy=false`
+  - `conditioning_inputs=["edited_first_frame","quadmask","vace_prompt"]`
+  - `source_frames_used_for_vace_conditioning=false`
+  - `generation_mask_is_full_domain=true`, `generation_mask_values=[255]`, `generation_mask_encodes_quadmask_semantics=false`
+  - `q3_loss_weight=0.1`, final `gate=0.046739354729652405`
+  - `metrics.jsonl` records `diffusion_loss`, `q3_mse`, `q3_loss_weight`, `grad_norm`, `gate`, and `quadmask_alignment`
+  - Evidence level: TRAINING only.
 - 已验证 branch tests: `tests.test_v04_anchor_manifest_audit`, `tests.test_v04_control_branch_freeze`, and `tests.test_v04_control_branch_gradients` 共 19 tests OK。
 
 仍未完成：
 
-- 按 1f17 修正后的格式重跑真实 14B overfit。
+- 将 trained v04 control branch checkpoint 接入 VACE inference runner。
 - operation swap / Q0 perturbation / Q2 perturbation / Q3 preservation 验收。
 - Phase 1B Kubric/HUMOTO 真实物理 counterfactual pairs。
 
@@ -195,6 +208,8 @@ This run is the first contract-safe add INTERFACE smoke. Visual quality and lear
 
 主 blocker 已从 bridge structural alignment 前移到 control / visual / training evidence：当前只有 remove-side STRUCTURAL + one-sample INTERFACE，不证明 learned control。
 
+旧 `/data/cwx/E2W/runs/physics_iq_for_simple_eval` 不能作为 remove VISUAL candidate，因为 remove conditioning future frames 混入了 source video。必须使用修复后的新 run root 重跑。
+
 当前不要从 archived executable-planner checkpoint 继续跑 full forward pass。
 
 ## Next Actions
@@ -213,5 +228,6 @@ This run is the first contract-safe add INTERFACE smoke. Visual quality and lear
 - [x] 3. 通过 structural gate 后，再跑一条 VACE INTERFACE smoke。
 - [x] 4. 扩大到 30 eval structural gate，确认 bridge 稳定性。
 - [x] 5a. 实现 CONTROL 验收工具 `tools/run_control_perturbation_test.py`（operation_swap / q0_suppressed / q0_shifted / q3_preservation 四项扰动）。
-- [ ] 5b. 等 VACE retrain 完成后，用新 checkpoint 运行四项 CONTROL 扰动测试。
+- [x] 5b. 完成修正后真实 14B self-insertion overfit，建立 TRAINING 证据。
+- [ ] 5c. 将 trained v04 control branch checkpoint 接入 VACE inference runner，并用新 checkpoint 运行四项 CONTROL 扰动测试。
 - [ ] 6. 人工或模型评审 remove + add 输出，达到 VISUAL 证据后再 package/report。

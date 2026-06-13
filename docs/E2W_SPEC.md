@@ -124,10 +124,21 @@ It must be a first-frame-edited conditioning video:
 
 ```text
 frame 0: edited first frame produced by the first-frame edit stage
-future frames: conditioning-format frames prepared for VACE, not the original observed video
+future frames: zero/blank conditioning placeholders, not the original observed video
 ```
 
 The original observed video must not be passed to VACE as `src_video` or any equivalent runtime input.
+It also must not be embedded into `vace_conditioning_video` future frames. Passing a
+video whose frame 0 is edited but whose later frames are copied from the factual source
+is a contract violation.
+
+Required metadata:
+
+```text
+vace_conditioning_video.frame_0_is_edited_first_frame: true
+vace_conditioning_video.future_frames_are_zero_filled: true
+vace_conditioning_video.future_frames_source_video_used: false
+```
 
 Rationale:
 

@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -80,6 +81,40 @@ class CounterfactualPlannerBridgeTests(unittest.TestCase):
         self.assertEqual(info["edited_size"], [4, 4])
         self.assertIn("offload", calls)
         self.assertNotIn("to=cuda", calls)
+
+    def test_vace_conditioning_video_does_not_copy_source_future_frames(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as td:
+            root = Path(td)
+            edited = root / "edited.jpg"
+            out_video = root / "conditioning.mp4"
+            Image.new("RGB", (8, 6), (200, 40, 20)).save(edited)
+
+            meta = bridge.write_vace_conditioning_video(
+                edited,
+                out_video,
+                frame_count=4,
+                width=8,
+                height=6,
+                fps=4.0,
+            )
+
+            cap = cv2.VideoCapture(str(out_video))
+            frames = []
+            try:
+                while True:
+                    ok, frame = cap.read()
+                    if not ok:
+                        break
+                    frames.append(frame)
+            finally:
+                cap.release()
+
+        self.assertEqual(meta["future_frames_source_video_used"], False)
+        self.assertEqual(meta["future_frames_are_zero_filled"], True)
+        self.assertEqual(len(frames), 4)
+        self.assertGreater(float(frames[0].mean()), 10.0)
+        for frame in frames[1:]:
+            self.assertLess(float(frame.mean()), 3.0)
 
 
 if __name__ == "__main__":
