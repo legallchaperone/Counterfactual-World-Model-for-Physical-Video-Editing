@@ -883,12 +883,18 @@ def make_dashboard(manifest_path: Path, run_root: Path, judgment_path: Path) -> 
                 vlm_json = {"error": str(exc)}
         meta_text = ""
         if artifacts.get("metadata"):
-            meta_text = Path(artifacts["metadata"]).read_text(encoding="utf-8")[:6000]
+            metadata_obj = json.loads(Path(artifacts["metadata"]).read_text(encoding="utf-8"))
+            meta_text = json.dumps(metadata_obj, ensure_ascii=False, indent=2)[:6000]
+            runtime_inputs = metadata_obj.get("vace_runtime_inputs") or {}
+            vace_prompt = metadata_obj.get("vace_prompt") or runtime_inputs.get("vace_prompt") or ""
+        else:
+            vace_prompt = ""
         saved = latest.get(sample_id, {})
         return (
             row.get("converted_video") or row.get("source_full_video"),
             artifacts.get("edited_video"),
             row["user_prompt"],
+            vace_prompt,
             row["expected_visible_outcome"],
             row["expected_physical_effect"],
             "\n".join(row["must_preserve"]),
@@ -958,6 +964,7 @@ def make_dashboard(manifest_path: Path, run_root: Path, judgment_path: Path) -> 
         with gr.Row():
             with gr.Column():
                 user_prompt = gr.Textbox(label="E2W prompt", lines=2)
+                vace_prompt = gr.Textbox(label="VACE prompt", lines=6)
                 expected_visible = gr.Textbox(label="Expected visible outcome", lines=2)
                 expected_physics = gr.Textbox(label="Expected physical effect", lines=2)
                 must_preserve = gr.Textbox(label="Must preserve", lines=4)
@@ -989,6 +996,7 @@ def make_dashboard(manifest_path: Path, run_root: Path, judgment_path: Path) -> 
             original_video,
             edited_video,
             user_prompt,
+            vace_prompt,
             expected_visible,
             expected_physics,
             must_preserve,
