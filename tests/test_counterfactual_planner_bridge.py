@@ -13,8 +13,8 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import run_counterfactual_planner_pipeline as bridge  # noqa: E402
-from run_counterfactual_planner_pipeline import build_quadmask  # noqa: E402
+import e2w_remove as bridge  # noqa: E402
+from e2w_remove import build_quadmask  # noqa: E402
 
 
 class CounterfactualPlannerBridgeTests(unittest.TestCase):
@@ -89,7 +89,7 @@ class CounterfactualPlannerBridgeTests(unittest.TestCase):
             out_video = root / "conditioning.mp4"
             Image.new("RGB", (8, 6), (200, 40, 20)).save(edited)
 
-            meta = bridge.write_vace_conditioning_video(
+            meta = bridge.build_conditioning_video(
                 edited,
                 out_video,
                 frame_count=4,

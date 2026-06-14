@@ -19,6 +19,10 @@ E2W is not a generic video editing benchmark, not pure text-to-video generation,
 
 ## 2. Counterfactual Planner Output Contract
 
+> Scope: this section (Counterfactual Planner / remove) specifies the **remove** operation planner
+> contract (hence `edit_type` is fixed to `remove` below). The **add** operation is a first-class
+> operation with its own planner contract — see *Add Planner Output Contract* later in this section.
+
 The current compliant planner is the **Counterfactual Planner**. Its compatible schema id is:
 
 ```text
@@ -84,6 +88,54 @@ Rules:
 - The downstream runtime `operation` must be `remove`.
 - `generation_mask` remains full-domain all-generate and must not be derived as a semantic local edit mask.
 - The bridge must record enough metadata to prove planner JSON, grounding output, `quadmask_npy`, `vace_prompt`, and VACE runtime inputs are connected.
+
+### Add Planner Output Contract
+
+Add is a first-class operation, parallel to remove. Its planner contract is intentionally simpler than remove's: there is no `counterfactual_state` or `if_removed` (those describe the physics of absence and are remove-specific), and grounding is supplied as an insertion location rather than detected from an already-present object (the object to add does not yet exist in the source video).
+
+Required planner top-level keys:
+
+```text
+target_ref
+edit_type
+vace_prompt
+primary_point
+```
+
+Rules:
+
+- `edit_type` must be exactly `add`.
+- `target_ref` must be a concise visual reference to the object to be added.
+- `vace_prompt` must name the added object and describe the edited scene after addition; it must pass the add rules in the VACE Prompt section (no removal-residue wording).
+- `primary_point` is a normalized insertion-location hint in `[x_1000, y_1000]` (0–1000 image coordinates) marking where the object should be added; `primary_bbox` (normalized `[x0,y0,x1,y1]` in the same units) is optional.
+- The runner must store the planner/model JSON output as an upstream artifact.
+- Runtime or adapter code must not silently rewrite planner JSON, replace planner text, or substitute teacher/manual text to make a run pass.
+
+### Add Planner-to-Runtime Mapping
+
+Add uses a different grounding order than remove. Because the new object does not exist in the source video, grounding happens *after* the first-frame edit:
+
+```text
+planner.target_ref + planner.primary_point
+  -> first-frame edit that adds the object
+  -> SAM2 on the edited first frame, seeded by primary_point
+  -> quadmask_npy (Q0 = inserted object region)
+
+planner.vace_prompt
+  -> vace_prompt
+
+planner.edit_type
+  -> operation (add)
+```
+
+Rules:
+
+- The first-frame edit materializes the added object; SAM2 then grounds the added object on the edited first frame, not on the original video.
+- The generated `quadmask_npy` must still satisfy the Quadmask section, with Q0 = the inserted object region.
+- `vace_prompt` must pass the add prompt rules in this spec.
+- The downstream runtime `operation` must be `add`.
+- `generation_mask` remains full-domain all-generate and must not be derived as a semantic local edit mask.
+- `vace_conditioning_video` is the edited first frame (with the added object) plus zero-filled future frames; the original source video is never passed to VACE.
 
 ### Archived Planner Schemas
 
