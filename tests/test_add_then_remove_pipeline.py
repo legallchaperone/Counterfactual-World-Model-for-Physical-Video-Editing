@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import run_add_then_remove_pipeline as pipe  # noqa: E402
+import e2w_add_then_remove as pipe  # noqa: E402
 
 
 def _six_inputs(operation: str, prompt: str) -> dict[str, object]:
@@ -31,12 +31,15 @@ class AddThenRemovePipelineTests(unittest.TestCase):
         source.write_bytes(b"source")
         checkpoint = root / "latest.pt"
         checkpoint.write_bytes(b"checkpoint")
+        add_planner_adapter = root / "add-lora.pt"
+        add_planner_adapter.write_bytes(b"add-lora")
         return SimpleNamespace(
             source_video=source,
             add_prompt="Add a red cube on the table.",
             sample_id="debug_add_remove_0001",
             run_dir=root / "run",
             control_branch_checkpoint=checkpoint,
+            add_planner_adapter=add_planner_adapter,
             vace_sample_steps=8,
             cuda_visible_devices="5",
             python=Path("/python"),
@@ -46,7 +49,7 @@ class AddThenRemovePipelineTests(unittest.TestCase):
         def fake_run_cmd(cmd, *, cwd, env, log_path):
             commands.append(cmd)
             run_dir = log_path.parent
-            if "run_add_pipeline_interface.py" in cmd[1]:
+            if "e2w_add.py" in cmd[1]:
                 add_stage = run_dir / "add_stage"
                 add_stage.mkdir(parents=True, exist_ok=True)
                 (add_stage / "edited_video.mp4").write_bytes(b"add-video")
@@ -67,7 +70,7 @@ class AddThenRemovePipelineTests(unittest.TestCase):
                         "vace_runtime_inputs": _six_inputs("add", "A red cube sits on the table."),
                     },
                 )
-            elif "run_counterfactual_planner_pipeline.py" in cmd[1]:
+            elif "e2w_remove.py" in cmd[1]:
                 remove_stage = run_dir / "remove_stage"
                 remove_stage.mkdir(parents=True, exist_ok=True)
                 edited = remove_stage / "edited_video_debug_add_remove_0001_remove_after_add.mp4"
@@ -117,8 +120,8 @@ class AddThenRemovePipelineTests(unittest.TestCase):
                 metadata = pipe.run_pipeline(args)
 
             self.assertEqual(len(commands), 2)
-            self.assertIn("run_add_pipeline_interface.py", commands[0][1])
-            self.assertIn("run_counterfactual_planner_pipeline.py", commands[1][1])
+            self.assertIn("e2w_add.py", commands[0][1])
+            self.assertIn("e2w_remove.py", commands[1][1])
             self.assertIn(str(args.run_dir / "add_stage" / "edited_video.mp4"), metadata["add_stage_edited_video"])
             self.assertEqual(metadata["operation_chain"], ["add", "remove"])
             self.assertEqual(metadata["add_target_ref"], "red cube")

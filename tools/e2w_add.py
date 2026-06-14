@@ -290,6 +290,9 @@ def main() -> int:
         "quadmask": quad_meta,
         "generation_mask": core.generation_mask_metadata(generation_mask),
         "control_branch": control_branch,
+        "control_branch_checkpoint_loaded": control_branch["control_branch_checkpoint_loaded"],
+        "trained_control_branch_used": control_branch["trained_control_branch_used"],
+        "control_branch_installed_in_forward_vace": control_branch["control_branch_installed_in_forward_vace"],
         "vace_runtime_inputs": {
             "vace_conditioning_video": str(vace_conditioning),
             "quadmask_npy": str(quadmask_npy),
