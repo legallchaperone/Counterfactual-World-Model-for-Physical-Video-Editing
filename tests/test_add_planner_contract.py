@@ -65,6 +65,35 @@ class AddPlannerContractTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("removal-residue", err)
 
+    def test_color_only_match_rejected(self) -> None:
+        # target_ref "a red mug": a prompt that only repeats the color must fail.
+        obj = _valid()
+        obj["vace_prompt"] = "A red table with warm light near the center."
+        ok, err = validate_add_planner_output(obj)
+        self.assertFalse(ok)
+        self.assertIn("name the added object", err)
+
+    def test_without_wording_rejected(self) -> None:
+        obj = _valid()
+        obj["vace_prompt"] = "A clean table without a red mug, soft lighting."
+        ok, err = validate_add_planner_output(obj)
+        self.assertFalse(ok)
+        self.assertIn("without", err)
+
+    def test_no_object_absence_wording_rejected(self) -> None:
+        obj = _valid()
+        obj["vace_prompt"] = "A tidy table with no mug present, warm light."
+        ok, err = validate_add_planner_output(obj)
+        self.assertFalse(ok)
+        self.assertIn("absent", err)
+
+    def test_object_noun_named_passes_even_with_other_no_phrases(self) -> None:
+        # "no harsh shadows" is a fine scene descriptor and must not false-trigger.
+        obj = _valid()
+        obj["vace_prompt"] = "A table with a red mug near the center, no harsh shadows, warm light."
+        ok, err = validate_add_planner_output(obj)
+        self.assertTrue(ok, err)
+
     def test_primary_point_must_be_norm1000(self) -> None:
         for bad in ([1200, 500], [500], "x", [500, -1]):
             obj = _valid()

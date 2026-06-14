@@ -491,6 +491,17 @@ def parse_add_planner_json(text: str) -> tuple[dict[str, Any] | None, str | None
 # --------------------------------------------------------------------------- #
 ADD_PLANNER_KEYS = ("target_ref", "edit_type", "vace_prompt", "primary_point")
 _ADD_STOPWORDS = {"the", "a", "an", "of", "on", "in", "near", "with", "and", "to", "at", "for"}
+# Attribute/modifier words that may appear in a target_ref (e.g. "red mug") but do
+# NOT, on their own, name the added object. The add prompt must name the object
+# itself, not just repeat a color/size/material modifier.
+_ADD_MODIFIER_WORDS = {
+    "red", "orange", "yellow", "green", "blue", "purple", "pink", "brown",
+    "black", "white", "gray", "grey", "gold", "golden", "silver", "beige", "tan",
+    "small", "big", "large", "tiny", "huge", "little", "tall", "short", "long",
+    "wide", "narrow", "round", "square", "oval", "thin", "thick",
+    "wooden", "metal", "metallic", "plastic", "glass", "leather", "ceramic", "steel", "stone",
+    "bright", "dark", "light", "shiny", "matte", "old", "new", "clean", "dirty", "soft", "hard",
+}
 
 
 def build_add_planner_user_prompt(user_request: str, *, sample_id: str | None = None, attempt: int = 1) -> str:
@@ -561,11 +572,20 @@ def validate_add_planner_output(obj: dict[str, Any]) -> tuple[bool, str | None]:
     vace_prompt = str(obj.get("vace_prompt") or "").strip()
     if not vace_prompt:
         return False, "missing vace_prompt"
+    prompt_l = vace_prompt.lower()
     if REMOVAL_RESIDUE_RE.search(vace_prompt):
         return False, "vace_prompt contains removal-residue wording (forbidden for add)"
+    if re.search(r"\bwithout\b", prompt_l):
+        return False, "vace_prompt uses absence wording 'without' (forbidden for add)"
     tokens = [t for t in re.findall(r"[A-Za-z]+", target_ref.lower()) if len(t) >= 3 and t not in _ADD_STOPWORDS]
-    if tokens and not any(t in vace_prompt.lower() for t in tokens):
-        return False, "vace_prompt must name the added object (no target_ref term present)"
+    # The object noun must be named, not just a modifier (e.g. a color). Prefer
+    # non-modifier tokens; fall back to all tokens if the ref is all modifiers.
+    object_tokens = [t for t in tokens if t not in _ADD_MODIFIER_WORDS] or tokens
+    # "no [..] <object>" describes the added object as absent — forbidden for add.
+    if any(re.search(rf"\bno\s+(?:\w+\s+){{0,2}}{re.escape(t)}\b", prompt_l) for t in object_tokens):
+        return False, "vace_prompt describes the added object as absent (forbidden for add)"
+    if object_tokens and not any(t in prompt_l for t in object_tokens):
+        return False, "vace_prompt must name the added object (only modifiers/colors present)"
     if not _norm1000_point_ok(obj.get("primary_point")):
         return False, "primary_point must be [x, y] in norm1000 (0..1000)"
     if obj.get("primary_bbox") is not None and not _norm1000_bbox_ok(obj.get("primary_bbox")):
