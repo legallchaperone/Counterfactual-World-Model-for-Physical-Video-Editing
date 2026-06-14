@@ -483,6 +483,96 @@ def parse_add_planner_json(text: str) -> tuple[dict[str, Any] | None, str | None
     return obj, None
 
 
+# --------------------------------------------------------------------------- #
+# Canonical add planner contract (single source of truth for add inference AND
+# add-planner SFT data). Mirrors docs/E2W_SPEC.md §2 "Add Planner Output
+# Contract": target_ref, edit_type=add, vace_prompt, primary_point (norm1000),
+# optional primary_bbox (norm1000).
+# --------------------------------------------------------------------------- #
+ADD_PLANNER_KEYS = ("target_ref", "edit_type", "vace_prompt", "primary_point")
+_ADD_STOPWORDS = {"the", "a", "an", "of", "on", "in", "near", "with", "and", "to", "at", "for"}
+
+
+def build_add_planner_user_prompt(user_request: str, *, sample_id: str | None = None, attempt: int = 1) -> str:
+    """Canonical add planner user prompt used by both add inference and SFT data.
+
+    Asks for the current-spec add planner JSON (edit_type=add, target_ref,
+    object-naming vace_prompt, primary_point in norm1000)."""
+    schema = {
+        "target_ref": "short visual reference to the object being added",
+        "edit_type": "add",
+        "vace_prompt": "positive edited-scene prompt that names the added object",
+        "primary_point": [500, 500],
+        "primary_bbox": [450, 450, 550, 550],
+    }
+    rules = [
+        "Return only one complete top-level JSON object. No markdown, prose, or comments.",
+        "edit_type must be exactly add.",
+        "target_ref is a concise visual reference to the object being added.",
+        "vace_prompt must name the added object and describe the edited scene after addition.",
+        "vace_prompt must not contain removal-residue wording such as absent, missing, gone, removed, "
+        "erased, no longer visible, without the added object, or where the object was.",
+        "primary_point is the insertion location as [x, y] in norm1000 coordinates: "
+        "[0, 0] top-left and [1000, 1000] bottom-right.",
+        "primary_bbox [x1, y1, x2, y2] in norm1000 is optional; include it if the insertion region is inferable.",
+    ]
+    if attempt > 1:
+        rules.append(f"This is retry attempt {attempt}; return a fresh complete planner JSON fixing only contract failures.")
+    sid = f"Set sample_id exactly to {sample_id}.\n" if sample_id else ""
+    return (
+        "You are the Edit2World add-operation planner. Given the first frame and the user request, "
+        "return a current-spec add planner JSON.\n\n"
+        f"Required JSON shape:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        "Rules:\n- " + "\n- ".join(rules) + "\n\n" + sid
+        + f"User request: {user_request.strip()}\n"
+    )
+
+
+def _norm1000_point_ok(pt: Any) -> bool:
+    return (
+        isinstance(pt, (list, tuple))
+        and len(pt) == 2
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= float(v) <= 1000 for v in pt)
+    )
+
+
+def _norm1000_bbox_ok(bb: Any) -> bool:
+    if not (
+        isinstance(bb, (list, tuple))
+        and len(bb) == 4
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= float(v) <= 1000 for v in bb)
+    ):
+        return False
+    return float(bb[0]) < float(bb[2]) and float(bb[1]) < float(bb[3])
+
+
+def validate_add_planner_output(obj: dict[str, Any]) -> tuple[bool, str | None]:
+    """Validate add planner JSON against the current-spec add contract.
+
+    Required: target_ref, edit_type=add, vace_prompt (names the object, no
+    removal-residue), primary_point in norm1000. primary_bbox optional."""
+    if not isinstance(obj, dict):
+        return False, "add planner output is not a JSON object"
+    target_ref = str(obj.get("target_ref") or "").strip()
+    if not target_ref:
+        return False, "missing target_ref"
+    if str(obj.get("edit_type") or "").strip() != "add":
+        return False, "edit_type must be exactly 'add'"
+    vace_prompt = str(obj.get("vace_prompt") or "").strip()
+    if not vace_prompt:
+        return False, "missing vace_prompt"
+    if REMOVAL_RESIDUE_RE.search(vace_prompt):
+        return False, "vace_prompt contains removal-residue wording (forbidden for add)"
+    tokens = [t for t in re.findall(r"[A-Za-z]+", target_ref.lower()) if len(t) >= 3 and t not in _ADD_STOPWORDS]
+    if tokens and not any(t in vace_prompt.lower() for t in tokens):
+        return False, "vace_prompt must name the added object (no target_ref term present)"
+    if not _norm1000_point_ok(obj.get("primary_point")):
+        return False, "primary_point must be [x, y] in norm1000 (0..1000)"
+    if obj.get("primary_bbox") is not None and not _norm1000_bbox_ok(obj.get("primary_bbox")):
+        return False, "primary_bbox must be [x1, y1, x2, y2] in norm1000 with x1<x2, y1<y2"
+    return True, None
+
+
 def parse_json_output(text: str) -> tuple[dict[str, Any] | None, str | None]:
     json_text, error = extract_json_text(text)
     if json_text is None:
