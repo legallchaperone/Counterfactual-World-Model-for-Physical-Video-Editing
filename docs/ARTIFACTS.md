@@ -33,7 +33,7 @@
 
 | Path (under `checkpoints/`) | Size | Status | Note |
 |---|---|---|---|
-| `vlm_planner_lora_v8_20260604_v3` | 367M | **CURRENT** | Counterfactual Planner baseline; default in `run_counterfactual_planner_pipeline.py` |
+| `vlm_planner_lora_v8_20260604_v3` | 367M | **CURRENT** | Counterfactual Planner (remove) baseline; default adapter in `e2w_remove.py` |
 | `v04_real_overfit_14b_specfix_selfinsert_20260612` | 260M | **CURRENT** | Corrected v04 control branch (TRAINING evidence) |
 | `v04_real_overfit_14b_specfix_selfinsert_20260612_pilot20` | 173M | **CURRENT** | 20-step pilot of the above (cited STATUS/ledger) |
 | `vlm_planner_lora_physics_iq_v5_split_eval` | 627M | **CODE-DEFAULT** | Default in `tools/e2w_v0_common.py`; pre-v8 planner LoRA |

@@ -146,13 +146,19 @@ Use this only as an interface check, not as a visual-quality benchmark.
 ```bash
 cd /home/cwx/E2W
 CUDA_VISIBLE_DEVICES=<gpu> PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/run_add_pipeline_interface.py \
+/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/e2w_add.py \
+  --planner-adapter <add-planner-lora> \
   --cuda-visible-devices <gpu> \
   --frame-num 21 \
   --planner-attempts 3 \
   --qwen-steps 5 \
   --vace-sample-steps 2
 ```
+
+The three unified interfaces are `tools/e2w_remove.py`, `tools/e2w_add.py`, and
+`tools/e2w_add_then_remove.py`, all built on `tools/e2w_pipeline_core.py`. The add
+interface requires an add-trained planner adapter (`--planner-adapter`); there is no
+archived default.
 
 Unit test:
 
