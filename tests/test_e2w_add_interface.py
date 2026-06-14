@@ -37,6 +37,16 @@ class E2WAddInterfaceTests(unittest.TestCase):
         spec = e2w_add.add_quadmask_spec_from_planner(parsed)
         self.assertNotIn("bbox_xyxy_norm1000", spec["primary"]["keyframes"][0])
 
+    def test_add_edit_instruction_is_planner_driven_with_region(self) -> None:
+        # names the object and encodes a region derived from the planner point
+        instr = e2w_add.add_edit_instruction("a red mug", [500, 500])
+        self.assertIn("a red mug", instr)
+        self.assertIn("center", instr)
+        self.assertIn("left", e2w_add.add_edit_instruction("a vase", [100, 100]))
+        self.assertIn("top", e2w_add.add_edit_instruction("a vase", [100, 100]))
+        self.assertIn("bottom", e2w_add.add_edit_instruction("a vase", [900, 900]))
+        self.assertIn("right", e2w_add.add_edit_instruction("a vase", [900, 900]))
+
     def test_ensure_frame_num_requires_4n_plus_1(self) -> None:
         e2w_add.ensure_frame_num(21)
         for bad in (20, 0, -1, 22):

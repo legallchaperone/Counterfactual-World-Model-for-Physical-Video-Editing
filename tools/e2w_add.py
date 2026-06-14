@@ -37,6 +37,7 @@ from build_add_quadmask_from_edited_first_frame import (  # noqa: E402
     DEFAULT_SAM2_CKPT,
     DEFAULT_SAM2_REPO,
     build_quadmask_from_primary,
+    diff_mask,
     load_rgb,
     sam2_primary_from_edited_frame,
     write_quadmask_preview,
@@ -88,6 +89,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sam2-repo", type=Path, default=DEFAULT_SAM2_REPO)
     p.add_argument("--sam2-checkpoint", type=Path, default=DEFAULT_SAM2_CKPT)
     p.add_argument("--sam2-config", default=DEFAULT_SAM2_CFG)
+    p.add_argument(
+        "--min-primary-diff-overlap",
+        type=float,
+        default=0.3,
+        help="min fraction of the SAM2 primary mask that must fall in the edited-vs-original change region",
+    )
     # VACE backend.
     p.add_argument("--python", type=Path, default=DEFAULT_PYTHON)
     p.add_argument("--vace-repo", type=Path, default=DEFAULT_VACE_REPO)
@@ -105,6 +112,31 @@ def parse_args() -> argparse.Namespace:
 def ensure_frame_num(frame_num: int) -> None:
     if frame_num <= 0 or frame_num % 4 != 1:
         raise ValueError(f"frame_num must be Wan-compatible 4n+1, got {frame_num}")
+
+
+def _region_phrase(primary_point: list[float]) -> str:
+    x, y = float(primary_point[0]), float(primary_point[1])
+    hx = "left" if x < 333 else ("right" if x > 667 else "center")
+    vy = "top" if y < 333 else ("bottom" if y > 667 else "middle")
+    if hx == "center" and vy == "middle":
+        return "center"
+    if hx == "center":
+        return f"{vy} center"
+    if vy == "middle":
+        return f"{hx} side"
+    return f"{vy}-{hx}"
+
+
+def add_edit_instruction(target_ref: str, primary_point: list[float]) -> str:
+    """Planner-driven first-frame edit instruction, aligned with the SAM2 seed point.
+
+    Uses planner target_ref + primary_point so the object is added at the same
+    location SAM2 is later seeded from (docs/E2W_SPEC.md Add Planner-to-Runtime
+    Mapping), rather than the raw upstream user request."""
+    return (
+        f"Add {target_ref} in the {_region_phrase(primary_point)} of the image, "
+        "blended naturally with consistent lighting and shadow."
+    )
 
 
 def add_quadmask_spec_from_planner(parsed: dict[str, Any]) -> dict[str, Any]:
@@ -189,17 +221,21 @@ def main() -> int:
     vace_prompt = str(parsed["vace_prompt"]).strip()
     write_text(run_dir / "vace_prompt.txt", vace_prompt)
 
-    # First-frame edit: add the object, using the user's add request as the edit instruction.
+    # First-frame edit: planner-driven instruction (target_ref + primary_point) so the
+    # added object's location is aligned with the SAM2 seed point used for grounding.
     edited_first_frame = run_dir / "edited_first_frame.png"
+    edit_instruction = add_edit_instruction(target_ref, parsed["primary_point"])
+    write_text(run_dir / "qwen_edit_prompt.txt", edit_instruction)
     edit_info = core.edit_first_frame(
         input_first_frame,
-        args.user_prompt,
+        edit_instruction,
         edited_first_frame,
         qwen_checkpoint=args.qwen_checkpoint,
         seed=args.qwen_seed,
         steps=args.qwen_steps,
         true_cfg_scale=args.qwen_true_cfg_scale,
     )
+    edit_info["instruction"] = edit_instruction
 
     # Add grounding: SAM2 on the EDITED first frame seeded by the planner point (tested path).
     mask_dir = run_dir / "add_quadmask"
@@ -215,11 +251,29 @@ def main() -> int:
         sam2_ckpt=args.sam2_checkpoint,
         sam2_cfg=args.sam2_config,
     )
+    # Consistency guard: the SAM2 primary must overlap the region that actually
+    # changed between the original and edited first frame (i.e. the added object).
+    # Otherwise SAM2 grounded background/wrong region and Q0 would not represent
+    # the inserted object — fail loudly instead of feeding VACE a meaningless mask.
+    original_rgb = load_rgb(input_first_frame)
+    edited_rgb = load_rgb(edited_first_frame)
+    change_region = diff_mask(original_rgb, edited_rgb)
+    primary_area = int(primary.sum())
+    if primary_area == 0:
+        raise RuntimeError("add grounding produced an empty primary mask")
+    overlap_ratio = float(np.logical_and(primary, change_region).sum()) / primary_area
+    sam2_info["primary_change_overlap_ratio"] = overlap_ratio
+    if overlap_ratio < args.min_primary_diff_overlap:
+        raise RuntimeError(
+            f"add grounding inconsistent: SAM2 primary overlaps the edited-vs-original change "
+            f"region only {overlap_ratio:.3f} (< {args.min_primary_diff_overlap}); the added object "
+            f"location likely does not match the planner primary_point"
+        )
     quadmask, quad_meta = build_quadmask_from_primary(
         primary,
         frame_num=args.frame_num,
-        original_first_frame=load_rgb(input_first_frame),
-        edited_first_frame=load_rgb(edited_first_frame),
+        original_first_frame=original_rgb,
+        edited_first_frame=edited_rgb,
     )
     quadmask_npy = run_dir / "quadmask.npy"
     np.save(quadmask_npy, quadmask)
