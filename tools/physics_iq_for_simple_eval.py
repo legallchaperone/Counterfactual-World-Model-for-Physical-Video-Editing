@@ -748,7 +748,7 @@ def normalize_add_artifacts(sample_dir: Path, row: dict[str, Any]) -> None:
         }
     )
     gen = data.get("generation_mask") or {}
-    data["generation_mask_values"] = gen.get("values")
+    data["generation_mask_values"] = gen.get("generation_mask_values") or gen.get("values")
     data["generation_mask_is_full_domain"] = gen.get("generation_mask_is_full_domain")
     write_json(meta_path, data)
 
@@ -813,9 +813,11 @@ def run_pipeline_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str,
         return {"sample_id": row["sample_id"], "status": "skipped_existing", "run_dir": str(sample_dir)}
     sample_dir.mkdir(parents=True, exist_ok=True)
     if row["operation"] == "add":
+        if not args.add_planner_adapter:
+            raise BenchmarkError("add rows require --add-planner-adapter (no archived default for the unified add interface)")
         cmd = [
             sys.executable,
-            str(TOOLS / "run_add_pipeline_interface.py"),
+            str(TOOLS / "e2w_add.py"),
             "--source-video",
             row["converted_video"],
             "--user-prompt",
@@ -824,6 +826,8 @@ def run_pipeline_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str,
             row["sample_id"],
             "--run-dir",
             str(sample_dir),
+            "--planner-adapter",
+            str(args.add_planner_adapter),
             "--vace-sample-steps",
             str(args.vace_sample_steps),
             "--control-branch-checkpoint",
@@ -837,7 +841,7 @@ def run_pipeline_row(args: argparse.Namespace, row: dict[str, Any]) -> dict[str,
         split = write_remove_split(row, sample_dir)
         cmd = [
             sys.executable,
-            str(TOOLS / "run_counterfactual_planner_pipeline.py"),
+            str(TOOLS / "e2w_remove.py"),
             "--eval-jsonl",
             str(split),
             "--output-dir",
@@ -1186,6 +1190,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_pipeline.add_argument("--all", action="store_true")
     run_pipeline.add_argument("--skip-existing", action="store_true")
     run_pipeline.add_argument("--control-branch-checkpoint", type=Path, required=True)
+    run_pipeline.add_argument("--add-planner-adapter", type=Path, default=None, help="add-planner LoRA adapter; required when the manifest has add rows (no archived default)")
     run_pipeline.add_argument("--vace-sample-steps", type=int, default=8)
     run_pipeline.add_argument("--cuda-visible-devices", default=os.environ.get("CUDA_VISIBLE_DEVICES"))
     run_pipeline.add_argument("--skip-vlm-judge", action="store_true")
