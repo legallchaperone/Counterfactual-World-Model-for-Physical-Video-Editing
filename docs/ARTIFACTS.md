@@ -34,7 +34,7 @@
 | Path (under `checkpoints/`) | Size | Status | Note |
 |---|---|---|---|
 | `vlm_planner_lora_v8_20260604_v3` | 367M | **CURRENT** | Counterfactual Planner (remove) baseline; default adapter in `e2w_remove.py` |
-| `vlm_planner_lora_add_v1_20260615` | ~370M | **CURRENT** | Add planner (SFT on 48 self-insert-inversion rows, 12 procedural objects); eval 24/24 add-contract-valid. Pass via `e2w_add.py --planner-adapter`. Bootstrap: procedural-object domain gap, real-object generalization unproven |
+| `vlm_planner_lora_add_v1_20260615` | ~370M | **CURRENT (bootstrap only)** | Add planner, narrow bootstrap SFT on self-insertion-inversion data; fits the contract-template distribution. **Eval is degenerate** (12 objects overlap train; each object's label JSON is verbatim-identical across backgrounds; placement/prompt fixed per object), so "24/24 valid" = format + 12-way recall, NOT generalization. Evidence: TRAINING only. Usable for an INTERFACE smoke; not reliable evidence of general add-planner capability. Pass via `e2w_add.py --planner-adapter` |
 | `v04_real_overfit_14b_specfix_selfinsert_20260612` | 260M | **CURRENT** | Corrected v04 control branch (TRAINING evidence) |
 | `v04_real_overfit_14b_specfix_selfinsert_20260612_pilot20` | 173M | **CURRENT** | 20-step pilot of the above (cited STATUS/ledger) |
 | `vlm_planner_lora_physics_iq_v5_split_eval` | 627M | **CODE-DEFAULT** | Default in `tools/e2w_v0_common.py`; pre-v8 planner LoRA |
