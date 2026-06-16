@@ -235,6 +235,78 @@ def edit_first_frame(
     }
 
 
+def edit_first_frame_inpaint(
+    image_path: Path,
+    prompt: str,
+    mask: np.ndarray,
+    out_path: Path,
+    *,
+    qwen_checkpoint: Path,
+    seed: int = 2025,
+    steps: int = 20,
+    true_cfg_scale: float = 4.0,
+    strength: float = 1.0,
+) -> dict[str, Any]:
+    """Masked add edit: the object is generated ONLY inside `mask` (HxW uint8, 255 =
+    region to paint). This makes the first-frame edit obey the planner's chosen
+    location, so SAM2 (seeded at the planner point inside the mask) grounds the
+    actually-added object. Uses QwenImageEditInpaintPipeline."""
+    import torch
+    from diffusers import QwenImageEditInpaintPipeline
+    from PIL import Image
+
+    image = Image.open(image_path).convert("RGB")
+    if mask.shape[:2] != (image.size[1], image.size[0]):
+        raise ValueError(f"mask shape {mask.shape} does not match image HxW {(image.size[1], image.size[0])}")
+    mask_img = Image.fromarray((np.asarray(mask) > 0).astype(np.uint8) * 255, mode="L")
+    dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+    pipe = QwenImageEditInpaintPipeline.from_pretrained(str(qwen_checkpoint), torch_dtype=dtype)
+    if torch.cuda.is_available():
+        if hasattr(pipe, "enable_model_cpu_offload"):
+            pipe.enable_model_cpu_offload()
+        else:
+            pipe = pipe.to("cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    generator = torch.Generator(device=device).manual_seed(seed)
+    result = pipe(
+        image=image,
+        mask_image=mask_img,
+        prompt=prompt,
+        negative_prompt=" ",
+        num_inference_steps=steps,
+        generator=generator,
+        true_cfg_scale=true_cfg_scale,
+        strength=strength,
+        num_images_per_prompt=1,
+    ).images[0]
+    raw_size = result.size
+    if raw_size != image.size:
+        result = result.resize(image.size, Image.Resampling.LANCZOS)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    result.save(out_path, quality=95)
+    with Image.open(out_path) as edited_image:
+        edited_size = list(edited_image.size)
+    del pipe
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return {
+        "instruction": prompt,
+        "source_image": str(image_path),
+        "edited_frame": str(out_path),
+        "edit_mode": "masked_inpaint_at_planner_region",
+        "seed": seed,
+        "steps": steps,
+        "true_cfg_scale": true_cfg_scale,
+        "strength": strength,
+        "mask_area_px": int((np.asarray(mask) > 0).sum()),
+        "source_size": list(image.size),
+        "raw_output_size": list(raw_size),
+        "edited_size": edited_size,
+        "target_mask_consumed_by_backend": False,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Grounding
 # --------------------------------------------------------------------------- #

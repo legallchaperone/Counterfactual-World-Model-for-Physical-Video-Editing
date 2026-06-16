@@ -47,6 +47,32 @@ class E2WAddInterfaceTests(unittest.TestCase):
         self.assertIn("bottom", e2w_add.add_edit_instruction("a vase", [900, 900]))
         self.assertIn("right", e2w_add.add_edit_instruction("a vase", [900, 900]))
 
+    def test_inpaint_mask_from_bbox_is_white_inside_expanded_box(self) -> None:
+        import numpy as np
+        parsed = _valid_parsed()  # bbox [450,440,560,540] norm1000
+        mask, box = e2w_add.build_inpaint_mask_from_planner(parsed, height=480, width=832, margin=0.0)
+        self.assertEqual(mask.shape, (480, 832))
+        self.assertEqual(set(np.unique(mask).tolist()), {0, 255})
+        # box ~ bbox in pixels: x in [450/1000*832, 560/1000*832], y in [440/1000*480, 540/1000*480]
+        self.assertAlmostEqual(box[0], round(450 / 1000 * 832), delta=2)
+        self.assertAlmostEqual(box[3], round(540 / 1000 * 480), delta=2)
+        self.assertTrue(mask[box[1] + 2, box[0] + 2] == 255)
+        self.assertTrue(mask[0, 0] == 0)
+
+    def test_inpaint_mask_margin_expands(self) -> None:
+        parsed = _valid_parsed()
+        _m0, b0 = e2w_add.build_inpaint_mask_from_planner(parsed, 480, 832, margin=0.0)
+        _m1, b1 = e2w_add.build_inpaint_mask_from_planner(parsed, 480, 832, margin=0.5)
+        self.assertLess(b1[0], b0[0])
+        self.assertGreater(b1[2], b0[2])
+
+    def test_inpaint_mask_falls_back_to_point_box_without_bbox(self) -> None:
+        parsed = _valid_parsed()
+        parsed.pop("primary_bbox")
+        mask, box = e2w_add.build_inpaint_mask_from_planner(parsed, 480, 832, margin=0.0)
+        self.assertLess(box[0], box[2])
+        self.assertLess(box[1], box[3])
+
     def test_ensure_frame_num_requires_4n_plus_1(self) -> None:
         e2w_add.ensure_frame_num(21)
         for bad in (20, 0, -1, 22):

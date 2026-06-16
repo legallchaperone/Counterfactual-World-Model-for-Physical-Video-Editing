@@ -85,6 +85,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--qwen-steps", type=int, default=20)
     p.add_argument("--qwen-true-cfg-scale", type=float, default=4.0)
     p.add_argument("--qwen-seed", type=int, default=2025)
+    p.add_argument("--inpaint-mask-margin", type=float, default=0.3, help="expand planner bbox by this fraction for the inpaint region")
+    p.add_argument("--inpaint-strength", type=float, default=1.0, help="inpaint strength (1.0 = fully regenerate masked region)")
     # SAM2 (add grounding on the edited frame).
     p.add_argument("--sam2-repo", type=Path, default=DEFAULT_SAM2_REPO)
     p.add_argument("--sam2-checkpoint", type=Path, default=DEFAULT_SAM2_CKPT)
@@ -137,6 +139,38 @@ def add_edit_instruction(target_ref: str, primary_point: list[float]) -> str:
         f"Add {target_ref} in the {_region_phrase(primary_point)} of the image, "
         "blended naturally with consistent lighting and shadow."
     )
+
+
+def build_inpaint_mask_from_planner(
+    parsed: dict[str, Any], height: int, width: int, *, margin: float = 0.3
+) -> tuple[np.ndarray, list[int]]:
+    """Build the inpaint mask (HxW uint8, 255 = paint region) from the planner's
+    chosen location: primary_bbox if present, else a box around primary_point.
+    norm1000 -> pixels, expanded by `margin` so the object + contact shadow fit.
+
+    This is what makes the edit OBEY the planner: the object can only be generated
+    inside this region, so SAM2 (seeded at primary_point inside it) grounds it."""
+    bbox = parsed.get("primary_bbox")
+    if bbox is not None:
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+    else:
+        px, py = [float(v) for v in parsed["primary_point"]]
+        half = 60.0  # norm1000 half-size fallback box around the point
+        x1, y1, x2, y2 = px - half, py - half, px + half, py + half
+    bx1, by1 = x1 / 1000.0 * width, y1 / 1000.0 * height
+    bx2, by2 = x2 / 1000.0 * width, y2 / 1000.0 * height
+    mw, mh = (bx2 - bx1), (by2 - by1)
+    bx1 -= mw * margin
+    bx2 += mw * margin
+    by1 -= mh * margin
+    by2 += mh * margin
+    ix1, iy1 = max(0, int(round(bx1))), max(0, int(round(by1)))
+    ix2, iy2 = min(width, int(round(bx2))), min(height, int(round(by2)))
+    if ix2 <= ix1 or iy2 <= iy1:
+        raise RuntimeError(f"degenerate inpaint mask box: {[ix1, iy1, ix2, iy2]}")
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[iy1:iy2, ix1:ix2] = 255
+    return mask, [ix1, iy1, ix2, iy2]
 
 
 def add_quadmask_spec_from_planner(parsed: dict[str, Any]) -> dict[str, Any]:
@@ -221,21 +255,30 @@ def main() -> int:
     vace_prompt = str(parsed["vace_prompt"]).strip()
     write_text(run_dir / "vace_prompt.txt", vace_prompt)
 
-    # First-frame edit: planner-driven instruction (target_ref + primary_point) so the
-    # added object's location is aligned with the SAM2 seed point used for grounding.
+    # First-frame edit: the PLANNER decides placement (primary_bbox/point); the object
+    # is inpainted ONLY inside that region, so the edit obeys the planner and SAM2
+    # (seeded at the planner point inside the mask) grounds the actually-added object.
+    with Image.open(input_first_frame) as _im:
+        in_w, in_h = _im.size
+    inpaint_mask, inpaint_box_px = build_inpaint_mask_from_planner(parsed, in_h, in_w, margin=args.inpaint_mask_margin)
+    np.save(run_dir / "inpaint_mask.npy", inpaint_mask)
+    Image.fromarray(inpaint_mask).save(run_dir / "inpaint_mask.png")
     edited_first_frame = run_dir / "edited_first_frame.png"
     edit_instruction = add_edit_instruction(target_ref, parsed["primary_point"])
     write_text(run_dir / "qwen_edit_prompt.txt", edit_instruction)
-    edit_info = core.edit_first_frame(
+    edit_info = core.edit_first_frame_inpaint(
         input_first_frame,
         edit_instruction,
+        inpaint_mask,
         edited_first_frame,
         qwen_checkpoint=args.qwen_checkpoint,
         seed=args.qwen_seed,
         steps=args.qwen_steps,
         true_cfg_scale=args.qwen_true_cfg_scale,
+        strength=args.inpaint_strength,
     )
     edit_info["instruction"] = edit_instruction
+    edit_info["inpaint_box_px"] = inpaint_box_px
 
     # Add grounding: SAM2 on the EDITED first frame seeded by the planner point (tested path).
     mask_dir = run_dir / "add_quadmask"
