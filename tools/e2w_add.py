@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sample-id", default="add_bg_000001")
     p.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
     p.add_argument("--run-dir", type=Path)
-    p.add_argument("--frame-num", type=int, default=21)
+    p.add_argument("--frame-num", type=int, default=None, help="VACE output length; default = source video length rounded to Wan 4n+1")
     p.add_argument("--fps", type=float, default=12.0)
     # Planner (inline add-planner inference). Adapter must be an add-capable checkpoint.
     p.add_argument("--planner-base-model", type=Path, default=DEFAULT_BASE_MODEL)
@@ -114,6 +114,13 @@ def parse_args() -> argparse.Namespace:
 def ensure_frame_num(frame_num: int) -> None:
     if frame_num <= 0 or frame_num % 4 != 1:
         raise ValueError(f"frame_num must be Wan-compatible 4n+1, got {frame_num}")
+
+
+def wan_frame_num_at_most(n: int) -> int:
+    """Largest Wan-compatible 4n+1 frame count <= n (>=1). Used to default the
+    output length to the source video length."""
+    n = max(1, int(n))
+    return n if n % 4 == 1 else n - ((n - 1) % 4)
 
 
 def _region_phrase(primary_point: list[float]) -> str:
@@ -228,7 +235,8 @@ def main() -> int:
     args = parse_args()
     if args.cuda_visible_devices:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
-    ensure_frame_num(args.frame_num)
+    if args.frame_num is not None:
+        ensure_frame_num(args.frame_num)
     if not args.source_video.exists():
         raise FileNotFoundError(args.source_video)
     run_dir = args.run_dir or (args.run_root / f"e2w_add_{args.sample_id}_{utc_stamp()}")
@@ -236,6 +244,10 @@ def main() -> int:
     write_text(run_dir / "user_prompt.txt", args.user_prompt)
 
     source_meta = video_meta(args.source_video)
+    # Default output length to the source video length (rounded to Wan 4n+1).
+    if args.frame_num is None:
+        args.frame_num = wan_frame_num_at_most(int(source_meta.get("frame_count") or 21))
+        print(f"frame_num defaulted to source length -> {args.frame_num}", flush=True)
     input_first_frame = run_dir / "input_first_frame.png"
     extract_first_frame(args.source_video, input_first_frame)
 

@@ -79,6 +79,15 @@ class E2WAddInterfaceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 e2w_add.ensure_frame_num(bad)
 
+    def test_wan_frame_num_at_most_matches_source(self) -> None:
+        self.assertEqual(e2w_add.wan_frame_num_at_most(81), 81)  # already 4n+1
+        self.assertEqual(e2w_add.wan_frame_num_at_most(80), 77)  # round down to 4n+1
+        self.assertEqual(e2w_add.wan_frame_num_at_most(20), 17)
+        self.assertEqual(e2w_add.wan_frame_num_at_most(1), 1)
+        # every result is Wan-compatible
+        for n in range(1, 130):
+            e2w_add.ensure_frame_num(e2w_add.wan_frame_num_at_most(n))
+
     def test_run_add_planner_returns_valid_output(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             with mock.patch.object(
