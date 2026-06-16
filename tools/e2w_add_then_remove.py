@@ -22,6 +22,12 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = Path(__file__).resolve().parent
+import sys  # noqa: E402
+
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+from e2w_v0_common import build_counterfactual_planner_user_prompt  # noqa: E402
+
 DEFAULT_PYTHON = Path("/data/cwx/conda/envs/edit2world-phase1-real/bin/python")
 DEFAULT_RUN_ROOT = Path("/data/cwx/E2W/runs/add_then_remove")
 CURRENT_VACE_INPUTS = {
@@ -105,23 +111,30 @@ def extract_video_frames(video_path: Path, frame_dir: Path) -> list[Path]:
 
 
 def build_remove_prompt(target_ref: str) -> str:
+    """Human-readable remove instruction for the just-added object (the planner
+    user_request). The model is fed this wrapped in the canonical Counterfactual
+    Planner prompt; a bare sentence makes the VLM reply with prose, not JSON."""
     target = target_ref.strip()
     if not target:
         raise PipelineError("add stage metadata missing target_ref")
-    return f"Remove only the newly added {target}. Restore the scene as if this added object was not present."
+    return f"remove the newly added {target}"
 
 
 def write_remove_eval_jsonl(path: Path, *, sample_id: str, first_frame: Path, target_ref: str) -> str:
-    prompt = build_remove_prompt(target_ref)
+    instruction = build_remove_prompt(target_ref)
+    video_id = f"{sample_id}_remove_after_add"
+    # Feed the remove planner its trained, schema-demanding prompt (same as e2w_remove
+    # / the planner SFT), not a bare English sentence.
+    planner_text = build_counterfactual_planner_user_prompt(video_id, instruction)
     row = {
-        "id": f"{sample_id}_remove_after_add",
-        "video_id": f"{sample_id}_remove_after_add",
+        "id": video_id,
+        "video_id": video_id,
         "messages": [
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": str(first_frame)},
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": planner_text},
                 ],
             }
         ],
@@ -133,7 +146,7 @@ def write_remove_eval_jsonl(path: Path, *, sample_id: str, first_frame: Path, ta
         },
     }
     write_jsonl(path, [row])
-    return prompt
+    return instruction
 
 
 def path_from_add_metadata(add_meta: dict[str, Any], add_stage: Path) -> Path:
