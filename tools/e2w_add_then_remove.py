@@ -414,7 +414,9 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     metadata = {
         "sample_id": args.sample_id,
-        "evidence_level": "VISUAL_CANDIDATE_ONLY",
+        "evidence_level": "INTERFACE",
+        "visual_candidate": True,
+        "visual_quality_evaluated": False,
         "control_claimed": False,
         "research_claimed": False,
         "operation_chain": ["add", "remove"],

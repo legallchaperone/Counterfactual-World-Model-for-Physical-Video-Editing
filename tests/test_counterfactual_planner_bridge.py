@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import types
@@ -81,6 +82,103 @@ class CounterfactualPlannerBridgeTests(unittest.TestCase):
         self.assertEqual(info["edited_size"], [4, 4])
         self.assertIn("offload", calls)
         self.assertNotIn("to=cuda", calls)
+
+    def test_remove_main_marks_invalid_planner_schema_failed(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as td:
+            root = Path(td)
+            frame_dir = root / "frames"
+            frame_dir.mkdir()
+            anchor = frame_dir / "00000.jpg"
+            Image.new("RGB", (4, 4), "black").save(anchor)
+            args = types.SimpleNamespace(
+                eval_jsonl=root / "eval.jsonl",
+                base_model=root / "base",
+                adapter=root / "adapter",
+                output_dir=root / "out",
+                sample_count=1,
+                seed=0,
+                max_new_tokens=8,
+                temperature=0.0,
+                dino_checkpoint=root / "dino.pth",
+                dino_config=None,
+                dino_box_threshold=0.25,
+                dino_text_threshold=0.25,
+                sam2_repo=root / "sam2",
+                sam2_checkpoint=root / "sam2.pt",
+                sam2_config="cfg.yaml",
+                python=Path("/python"),
+                vace_repo=root / "vace",
+                vace_ckpt=root / "vace.ckpt",
+                vace_model_name="vace-14B",
+                vace_size="480p",
+                vace_sample_steps=1,
+                vace_base_seed=1,
+                vace_fps=6.0,
+                control_branch_checkpoint=None,
+                skip_vace=False,
+                qwen_image_edit_checkpoint=root / "qwen",
+                qwen_image_edit_seed=1,
+                qwen_image_edit_steps=1,
+                qwen_image_edit_true_cfg_scale=1.0,
+                skip_first_frame_edit=False,
+            )
+            row = {"video_id": "bad", "messages": [{"role": "user", "content": [{"type": "image", "image": str(anchor)}]}]}
+            planned = [
+                {
+                    "row": row,
+                    "raw_output": "{}",
+                    "parsed": {},
+                    "json_parse_ok": True,
+                    "schema_valid": False,
+                    "validation_error": "counterfactual_state must be an object",
+                    "target_ref": "red cube",
+                }
+            ]
+            fake_inference = types.SimpleNamespace(load_model=lambda *_args, **_kwargs: object())
+            with (
+                mock.patch.object(bridge, "parse_args", return_value=args),
+                mock.patch.object(bridge, "load_jsonl", return_value=[row]),
+                mock.patch.object(bridge, "run_planner", return_value=planned),
+                mock.patch.object(bridge.core, "find_groundingdino_config", return_value=root / "GroundingDINO.py"),
+                mock.patch.object(bridge.torch.cuda, "is_available", return_value=True),
+                mock.patch.dict(
+                    sys.modules,
+                    {
+                        "groundingdino": types.SimpleNamespace(__file__=str(root / "groundingdino" / "__init__.py")),
+                        "groundingdino.util": types.SimpleNamespace(),
+                        "groundingdino.util.inference": fake_inference,
+                    },
+                ),
+            ):
+                rc = bridge.main()
+
+            summary = json.loads((args.output_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(summary["results"][0]["status"], "failed")
+        self.assertIn("planner schema invalid", summary["results"][0]["error"])
+
+    def test_vace_alignment_metadata_records_shapes_and_method(self) -> None:
+        quadmask = np.zeros((5, 6, 7), dtype=np.uint8)
+        generation_mask = np.full((5, 6, 7), 255, dtype=np.uint8)
+
+        meta = bridge.core.vace_alignment_metadata(
+            frame_num=5,
+            height=6,
+            width=7,
+            quadmask=quadmask,
+            generation_mask=generation_mask,
+            temporal_alignment_method="source_frame_count_already_wan_4n_plus_1",
+            spatial_alignment_method="test spatial alignment",
+            source_frame_count=5,
+        )
+
+        self.assertEqual(meta["conditioning_video_shape"], [5, 6, 7, 3])
+        self.assertEqual(meta["quadmask_shape"], [5, 6, 7])
+        self.assertEqual(meta["generation_mask_shape"], [5, 6, 7])
+        self.assertTrue(meta["alignment_required"])
+        self.assertTrue(meta["shapes_aligned"])
+        self.assertIn("test spatial alignment", meta["alignment_method"])
 
     def test_vace_conditioning_video_does_not_copy_source_future_frames(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as td:

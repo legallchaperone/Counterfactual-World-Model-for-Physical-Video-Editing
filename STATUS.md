@@ -1,6 +1,6 @@
 # E2W 当前状态
 
-最后更新：2026-06-13T00:00:00Z UTC。
+最后更新：2026-06-16T00:00:00Z UTC。
 
 本文件是当前项目状态真源。`docs/STATUS.md` 只保留指向本文件的摘要；不要把历史 handoff、README 示例或旧 run 当作当前状态。
 
@@ -8,10 +8,11 @@
 
 2026-06-16 更新（feat/unify-pipeline-interfaces 分支）：
 
-- 接口统一为三个：`tools/e2w_remove.py` / `e2w_add.py` / `e2w_add_then_remove.py`，共享 `tools/e2w_pipeline_core.py`；add 新路径已弃用 v6/eval_vlm_planner，旧脚本保留为 shim。
+- 接口统一为三个：`tools/e2w_remove.py` / `e2w_add.py` / `e2w_add_then_remove.py`，共享 `tools/e2w_pipeline_core.py`；add 新路径已弃用 v6/eval_vlm_planner，旧入口 `run_counterfactual_planner_pipeline.py` / `run_add_pipeline_interface.py` / `run_add_then_remove_pipeline.py` 只保留为 shim。
 - add planner LoRA v1（`vlm_planner_lora_add_v1_20260615`）：self-insertion 反演 bootstrap SFT。证据等级 **仅 TRAINING**——eval 退化（train/eval 12 物体重叠且每物体标签逐字相同），不证明泛化。
 - add 一等公民设计：first-frame edit 改为 **planner-bbox 约束的 masked inpaint**（物体只在 planner 选定区域生成），SAM2 同点 grounding + 一致性守卫；e2w_add 端到端 INTERFACE smoke 通过（overlap 0.796，产出 edited_video）。
-- **诚实边界**：该 smoke 仅 INTERFACE。VACE 生成质量差、对 quadmask 把控不稳（base VACE + sample_steps=2，未接 trained control branch）；要让 VACE 真正吃准 quadmask 需要大规模 control-branch 训练。control/visual/research 均不成立。
+- 2026-06-16 review 修复已落地：remove schema/prompt/VACE 失败会 fail loudly；add planner 要求 `primary_point` 落在 `primary_bbox` 内；masked-inpaint metadata 真实记录 mask 被消费；add/remove metadata 记录 alignment；add-then-remove evidence level 固定为合法的 `INTERFACE`，另用 `visual_candidate=true` 表示人工评审候选。
+- 固定跑法见 `docs/UNIFIED_PIPELINE_RUNBOOK.md`。**诚实边界**：统一接口完成的是 current-spec INTERFACE/STRUCTURAL 对齐，不是 CONTROL/VISUAL/RESEARCH 成功；要让 VACE 真正吃准 quadmask 仍需要 control-branch 接入后的扰动测试和更大规模训练/评审。
 
 当前已有一条 Counterfactual Planner -> grounding bridge -> current VACE runtime 的 remove-side INTERFACE smoke。仍不能声称 control / visual / research 成功。
 
@@ -96,7 +97,7 @@ Evidence level:
 
 Code-side fixes made during this gate:
 
-- `tools/run_counterfactual_planner_pipeline.py` preserves SAM2 primary as Q0 instead of collapsing all primary pixels into Q1；
+- unified remove runner (`tools/e2w_remove.py`; legacy `run_counterfactual_planner_pipeline.py` is a shim) preserves SAM2 primary as Q0 instead of collapsing all primary pixels into Q1；
 - first-frame Qwen Image Edit uses model CPU offload when available to avoid single-GPU OOM；
 - regression coverage added in `tests/test_counterfactual_planner_bridge.py`。
 
@@ -213,7 +214,7 @@ This run is the first contract-safe add INTERFACE smoke. Visual quality and lear
 
 ## 当前阻塞点
 
-主 blocker 已从 bridge structural alignment 前移到 control / visual / training evidence：当前只有 remove-side STRUCTURAL + one-sample INTERFACE，不证明 learned control。
+主 blocker 已从接口/bridge structural alignment 前移到 control / visual / training evidence：统一接口现在按 current spec 固定为 `e2w_remove.py` / `e2w_add.py` / `e2w_add_then_remove.py`，但这仍不证明 learned control。
 
 旧 `/data/cwx/E2W/runs/physics_iq_for_simple_eval` 不能作为 remove VISUAL candidate，因为 remove conditioning future frames 混入了 source video。必须使用修复后的新 run root 重跑。
 
@@ -221,7 +222,7 @@ This run is the first contract-safe add INTERFACE smoke. Visual quality and lear
 
 ## Next Actions
 
-- [x] 1. 修正 `tools/run_counterfactual_planner_pipeline.py` 的 bridge contract，使输出符合 `docs/E2W_SPEC.md`：
+- [x] 1. 修正 remove bridge contract（当前入口 `tools/e2w_remove.py`；旧 `tools/run_counterfactual_planner_pipeline.py` 为 shim），使输出符合 `docs/E2W_SPEC.md`：
   - `generation_mask` full-domain all-255；
   - metadata 使用 E2W-level 六输入命名；
   - backend `src_video`/`prompt` 只作为 adapter 内部名；

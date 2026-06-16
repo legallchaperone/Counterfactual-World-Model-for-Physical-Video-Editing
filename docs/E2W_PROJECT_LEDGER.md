@@ -2,7 +2,7 @@
 
 > **Owner / update convention:** This file is the assistant-maintained continuity ledger for E2W. The user asked that Hermes maintains it. Treat it as a project state ledger, not a scratchpad. Update it only when a durable fact, boundary decision, verified artifact, or next-step priority changes. Do not use it for transient task notes.
 
-Last updated: 2026-06-13T00:00:00Z
+Last updated: 2026-06-16T00:00:00Z
 Maintainer skill: `e2w-project-ledger`
 Canonical repo: `ssh cwx:/home/cwx/E2W`
 Current spec: `/home/cwx/E2W/docs/E2W_SPEC.md`
@@ -92,6 +92,14 @@ Durable boundary decisions:
 - Training manifests / target videos / side packets / cycle roles are not defined by the current runtime spec.
 - Archived executable-planner schemas, tests, fixtures, tools, and artifacts are archived references only, not current planner baselines.
 
+Unified interface decision (2026-06-16):
+
+- New runs should use only `tools/e2w_remove.py`, `tools/e2w_add.py`, and `tools/e2w_add_then_remove.py`.
+- Those three entry points share `tools/e2w_pipeline_core.py` and must emit the current six-input VACE runtime contract.
+- Legacy names `tools/run_counterfactual_planner_pipeline.py`, `tools/run_add_pipeline_interface.py`, and `tools/run_add_then_remove_pipeline.py` are compatibility shims only; do not use them in new docs/reports/automation.
+- Fixed run commands live in `docs/UNIFIED_PIPELINE_RUNBOOK.md`.
+- Review fixes landed with the unification: remove schema/prompt/VACE failures fail loudly; add `primary_point` must lie inside `primary_bbox`; masked-inpaint metadata records backend mask consumption; VACE alignment metadata is recorded; chained add-then-remove uses evidence level `INTERFACE` plus `visual_candidate=true` rather than inventing a new evidence level.
+
 ---
 
 ## 3. Required Habit for Future E2W Conversations
@@ -143,7 +151,7 @@ Current understanding:
 - The Counterfactual Planner grounding bridge and runtime adapter have current-spec fixes for full-domain generation masks, E2W-level VACE input metadata, and adapter-name separation.
 - Remove-side bridge STRUCTURAL gate passed on 30 sampled eval rows at `/data/cwx/E2W/runs/counterfactual_bridge_skipvace_30_20260609T_run`: planner parse/schema OK, GroundingDINO/SAM2 OK, all `quadmask_npy` value sets `[0,127,255]` with nonzero Q0/Q2, `generation_mask` values `[255]`, `vace_prompt_valid=true`, and `source_video_passed_to_vace=false`.
 - One remove-side current-spec VACE INTERFACE smoke passed at `/data/cwx/E2W/runs/counterfactual_bridge_vace_interface_1_gpu2_20260609T_run` for sample `4fe6619a47`: first-frame edit OK, VACE backend returncode `0`, and output `/data/cwx/E2W/runs/counterfactual_bridge_vace_interface_1_gpu2_20260609T_run/edited_video_4fe6619a47.mp4` exists.
-- Code-side bridge fix: `tools/run_counterfactual_planner_pipeline.py` now preserves SAM2 primary pixels as Q0 instead of collapsing them into Q1; Qwen Image Edit first-frame edit uses model CPU offload when available.
+- Code-side bridge fix: current remove runner `tools/e2w_remove.py` (legacy `tools/run_counterfactual_planner_pipeline.py` is a shim) preserves SAM2 primary pixels as Q0 instead of collapsing them into Q1; Qwen Image Edit first-frame edit uses model CPU offload when available.
 - Archived executable-planner materials are archived historical evidence.
 
 Do not claim:
@@ -201,14 +209,14 @@ Do not claim:
 
 Current understanding:
 
-- Add operation is contract-supported in schema, prompt serialization, VACE prompt validation, runner wrappers, and tests.
-- Branch `feat/add-pipeline` adds an add INTERFACE smoke runner using real planner/model inference (`original video + user prompt -> planner/model -> vace_prompt`), Qwen Edit first-frame materialization, SAM2 on `edited_first_frame`, full-domain all-255 generation mask, and VACE.
-- Verified add INTERFACE run: `/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z` produced `edited_video.mp4` with `metadata.json` acceptance checks passing. Evidence level remains INTERFACE only; visual quality was not evaluated.
-- Follow-up artifact audit on 2026-06-09 found the run metadata's actual add `vace_prompt` contains remove-residue text: `The red mug is no longer present on the table.` This violates the current add prompt rule in `docs/E2W_SPEC.md`. Treat the run as add INTERFACE/provenance smoke only, not as contract-safe add prompt STRUCTURAL evidence.
-- Code-side follow-up on 2026-06-09 changed the add runner prompt path to avoid archived v6 executable schema wording and require current add fields: model-produced `vace_prompt`, top-level `target_ref`, positive add wording, and point/bbox grounding. No fresh add acceptance run has been completed after this fix.
-- In that run, planner output was not manually modified and no teacher/manual `vace_prompt` was used. The planner produced valid add operation and primary point grounding but no bbox; the add runner accepted point-only grounding for SAM2 and recorded `accepted_point_only_for_add_interface=true`.
-- A historical 0076 add-mug full pipeline artifact exists and passed machine/interface checks under older docs, but it used teacher/manual artifacts, not learned VLM planner add inference.
-- Add visual success and learned VACE add semantics are not established.
+- Add operation is contract-supported in schema, prompt serialization, VACE prompt validation, unified runner wrappers, and tests.
+- Current add entry point is `tools/e2w_add.py`; current add-then-remove entry point is `tools/e2w_add_then_remove.py`; both share `tools/e2w_pipeline_core.py`.
+- The add path now uses the current first-class add design: add planner output (`target_ref`, `vace_prompt`, `primary_point`, optional `primary_bbox`) -> planner-region masked inpaint first-frame edit -> SAM2 on the edited first frame -> change-overlap consistency guard -> `quadmask_npy` -> VACE(add).
+- `tools/run_add_pipeline_interface.py` is now only a deprecated compatibility shim to `tools/e2w_add.py`; new runs/docs should not use it.
+- Verified add INTERFACE run after the masked-inpaint update exists in the branch status (`e2w_add` smoke with overlap 0.796 and `edited_video` output). Evidence level remains INTERFACE only; visual quality was not evaluated.
+- Historical add run `/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z` had a remove-residue prompt gap and remains only provenance/interface history, not contract-safe add prompt evidence.
+- Contract-safe add v2 run `/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_v2_20260609T152335Z` fixed the prompt path but predates the final unified masked-inpaint interface.
+- Add visual success, add/remove operation control, and learned VACE add semantics are not established.
 
 Important historical run:
 
@@ -218,7 +226,7 @@ Important historical run:
 
 Claim boundary:
 
-> Add pipeline now has one real-planner INTERFACE/provenance smoke success plus one older teacher/manual 0076 smoke artifact. The current real-planner add run has an add prompt-contract gap, and the code-side prompt fix has not yet been rerun as acceptance evidence, so learned planner add quality, contract-safe add prompting, visual success, and learned VACE add semantics are not established.
+> The add/add-then-remove interfaces are unified at current-spec INTERFACE level. This proves the code path and metadata contract, not learned planner generalization, renderer control, visual success, or research-level counterfactual editing.
 
 ---
 

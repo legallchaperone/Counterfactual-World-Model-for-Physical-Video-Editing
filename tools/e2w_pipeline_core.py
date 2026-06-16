@@ -2,9 +2,8 @@
 """Shared core stages for the E2W remove / add / add->remove interfaces.
 
 This module holds single, operation-parameterized, checkpoint-injected
-implementations of the pipeline stages that were previously duplicated across
-`run_counterfactual_planner_pipeline.py` (remove) and
-`run_add_pipeline_interface.py` (add):
+implementations of the pipeline stages used by the unified current interfaces
+`e2w_remove.py`, `e2w_add.py`, and `e2w_add_then_remove.py`:
 
     planner inference -> first-frame edit -> grounding -> quadmask ->
     conditioning video -> generation mask -> VACE backend
@@ -300,10 +299,12 @@ def edit_first_frame_inpaint(
         "true_cfg_scale": true_cfg_scale,
         "strength": strength,
         "mask_area_px": int((np.asarray(mask) > 0).sum()),
+        "mask_shape": list(mask.shape),
         "source_size": list(image.size),
         "raw_output_size": list(raw_size),
         "edited_size": edited_size,
-        "target_mask_consumed_by_backend": False,
+        "target_mask_consumed_by_backend": True,
+        "inpaint_mask_consumed_by_backend": True,
     }
 
 
@@ -548,6 +549,34 @@ def generation_mask_metadata(mask: np.ndarray) -> dict[str, Any]:
         "generation_mask_values": values,
         "generation_mask_is_full_domain": values == [255],
         "generation_mask_encodes_quadmask_semantics": False,
+    }
+
+
+def vace_alignment_metadata(
+    *,
+    frame_num: int,
+    height: int,
+    width: int,
+    quadmask: np.ndarray,
+    generation_mask: np.ndarray,
+    temporal_alignment_method: str,
+    spatial_alignment_method: str,
+    source_frame_count: int | None = None,
+) -> dict[str, Any]:
+    """Explicit current-spec alignment metadata for VACE inputs."""
+    expected_mask_shape = [frame_num, height, width]
+    alignment_method = f"{temporal_alignment_method}; {spatial_alignment_method}"
+    return {
+        "frame_num": frame_num,
+        "source_frame_count": source_frame_count,
+        "conditioning_video_shape": [frame_num, height, width, 3],
+        "quadmask_shape": list(quadmask.shape),
+        "generation_mask_shape": list(generation_mask.shape),
+        "alignment_required": True,
+        "alignment_method": alignment_method,
+        "temporal_alignment_method": temporal_alignment_method,
+        "spatial_alignment_method": spatial_alignment_method,
+        "shapes_aligned": list(quadmask.shape) == expected_mask_shape and list(generation_mask.shape) == expected_mask_shape,
     }
 
 

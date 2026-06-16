@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,20 +9,13 @@ from unittest import mock
 import numpy as np
 from PIL import Image
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import build_add_quadmask_from_edited_first_frame as add_masks  # noqa: E402
+import e2w_add  # noqa: E402
+import e2w_pipeline_core as core  # noqa: E402
 from build_add_quadmask_from_edited_first_frame import build_quadmask_from_primary  # noqa: E402
-from e2w_v0_common import normalize_to_e2w_contract, serialize_vace_prompt  # noqa: E402
-from run_add_pipeline_interface import (  # noqa: E402
-    build_add_planner_user_prompt,
-    build_conditioning_video,
-    build_generation_mask,
-    ensure_frame_num,
-    planner_target_ref_from_raw,
-    write_split_jsonl,
-)
+from e2w_v0_common import build_add_planner_user_prompt, validate_add_planner_output  # noqa: E402
 
 
 class AddPipelineInterfaceTests(unittest.TestCase):
@@ -44,8 +37,12 @@ class AddPipelineInterfaceTests(unittest.TestCase):
     def test_generation_mask_is_all_255(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            meta = build_generation_mask(root / "generation_mask.npy", root / "generation_mask.mp4", frame_num=5, height=4, width=6, fps=1)
-            arr = np.load(root / "generation_mask.npy")
+            arr = core.build_generation_mask(5, 4, 6)
+            np.save(root / "generation_mask.npy", arr)
+            core.write_gray_video(arr, root / "generation_mask.mp4", fps=1)
+            meta = core.generation_mask_metadata(arr)
+
+            self.assertTrue((root / "generation_mask.mp4").exists())
             self.assertEqual(list(arr.shape), [5, 4, 6])
             self.assertEqual(arr.dtype, np.uint8)
             self.assertEqual(sorted(int(x) for x in np.unique(arr)), [255])
@@ -53,47 +50,32 @@ class AddPipelineInterfaceTests(unittest.TestCase):
             self.assertFalse(meta["generation_mask_encodes_quadmask_semantics"])
 
     def test_add_planner_prompt_uses_current_add_contract_not_v6_executable_schema(self) -> None:
-        prompt = build_add_planner_user_prompt("add_001", "Add a red mug on the table.", attempt=2)
+        prompt = build_add_planner_user_prompt("Add a red mug on the table.", sample_id="add_001", attempt=2)
         self.assertIn('"vace_prompt"', prompt)
         self.assertIn('"target_ref"', prompt)
-        self.assertIn("primary_point_norm1000", prompt)
+        self.assertIn('"primary_point"', prompt)
+        self.assertIn('"primary_bbox"', prompt)
         self.assertNotIn("e2w.planner_io.v6_executable.v1", prompt)
         self.assertNotIn("executable planner schema", prompt.lower())
-        self.assertNotIn("quadmask_spec.primary", prompt)
+        self.assertNotIn("quadmask_spec", prompt)
         self.assertNotIn("if_removed", prompt)
-        self.assertIn("must not contain removal-residue language", prompt)
+        self.assertIn("removal-residue", prompt)
 
-    def test_split_jsonl_prompt_does_not_inject_archived_schema_text(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            path = Path(td) / "split.jsonl"
-            write_split_jsonl(path, sample_id="add_001", video=Path("/tmp/source.mp4"), user_prompt="Add a red mug.", attempt=1)
-            row = json.loads(path.read_text(encoding="utf-8"))
-            content = row["messages"][0]["content"]
-            self.assertIn('"vace_prompt"', content)
-            self.assertNotIn("e2w.planner_io.v6_executable.v1", content)
-            self.assertNotIn("quadmask_spec", content)
-
-    def test_current_add_raw_output_normalizes_to_planner_vace_prompt(self) -> None:
+    def test_current_add_planner_output_validates_and_maps_to_quadmask_spec(self) -> None:
         raw = {
-            "operation": "add",
+            "edit_type": "add",
             "target_ref": "red mug",
             "vace_prompt": "A red mug sits naturally on the table near the center of the image.",
-            "primary_point_norm1000": [500, 520],
-            "affected_regions": ["table contact shadow"],
+            "primary_point": [500, 520],
+            "primary_bbox": [450, 480, 560, 600],
         }
-        sample = {"id": "add_001", "messages": [{"role": "user", "content": "User request: Add a red mug."}]}
-        meta = {"width": 1000, "height": 1000, "frame_count": 21}
-        edit_plan, spec = normalize_to_e2w_contract(raw, sample, meta, source="planner_pred")
-        self.assertEqual(edit_plan["edit_subject"]["label"], "red mug")
-        self.assertEqual(edit_plan["edited_scene"]["caption"], raw["vace_prompt"])
-        self.assertEqual(serialize_vace_prompt(edit_plan).splitlines()[1], raw["vace_prompt"])
-        self.assertEqual(spec["primary"]["point"], [500, 520])
-
-    def test_planner_target_ref_comes_from_top_level_raw_output(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            raw_path = Path(td) / "raw.pred.json"
-            raw_path.write_text(json.dumps({"target_ref": "red mug", "target_objects": [{"name": "wrong legacy label"}]}), encoding="utf-8")
-            self.assertEqual(planner_target_ref_from_raw(raw_path), "red mug")
+        ok, err = validate_add_planner_output(raw)
+        self.assertTrue(ok, err)
+        spec = e2w_add.add_quadmask_spec_from_planner(raw)
+        keyframe = spec["primary"]["keyframes"][0]
+        self.assertEqual(spec["operation"], "add")
+        self.assertEqual(keyframe["positive_points_norm1000"], [[500, 520]])
+        self.assertEqual(keyframe["bbox_xyxy_norm1000"], [450, 480, 560, 600])
 
     def test_conditioning_video_records_zero_filled_future_frames(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -103,16 +85,16 @@ class AddPipelineInterfaceTests(unittest.TestCase):
             image = np.zeros((8, 10, 3), dtype=np.uint8)
             image[0, 0] = [255, 0, 0]
             Image.fromarray(image).save(first)
-            meta = build_conditioning_video(first, out, frame_num=5, fps=1)
+            meta = core.build_conditioning_video(first, out, frame_count=5, width=10, height=8, fps=1)
             self.assertTrue(out.exists())
             self.assertTrue(meta["frame_0_is_edited_first_frame"])
             self.assertTrue(meta["future_frames_are_zero_filled"])
             self.assertFalse(meta["future_frames_source_video_used"])
 
     def test_frame_num_must_be_4n_plus_1(self) -> None:
-        ensure_frame_num(21)
+        e2w_add.ensure_frame_num(21)
         with self.assertRaises(ValueError):
-            ensure_frame_num(22)
+            e2w_add.ensure_frame_num(22)
 
     def test_sam2_propagation_uses_validated_grounding(self) -> None:
         with tempfile.TemporaryDirectory() as td:

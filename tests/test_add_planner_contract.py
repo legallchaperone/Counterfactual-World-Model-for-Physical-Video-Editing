@@ -109,6 +109,14 @@ class AddPlannerContractTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("primary_bbox", err)
 
+    def test_primary_point_must_lie_inside_bbox(self) -> None:
+        obj = _valid()
+        obj["primary_point"] = [800, 480]
+        obj["primary_bbox"] = [450, 440, 560, 540]
+        ok, err = validate_add_planner_output(obj)
+        self.assertFalse(ok)
+        self.assertIn("inside primary_bbox", err)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -586,10 +586,17 @@ def validate_add_planner_output(obj: dict[str, Any]) -> tuple[bool, str | None]:
         return False, "vace_prompt describes the added object as absent (forbidden for add)"
     if object_tokens and not any(t in prompt_l for t in object_tokens):
         return False, "vace_prompt must name the added object (only modifiers/colors present)"
-    if not _norm1000_point_ok(obj.get("primary_point")):
+    point = obj.get("primary_point")
+    if not _norm1000_point_ok(point):
         return False, "primary_point must be [x, y] in norm1000 (0..1000)"
-    if obj.get("primary_bbox") is not None and not _norm1000_bbox_ok(obj.get("primary_bbox")):
-        return False, "primary_bbox must be [x1, y1, x2, y2] in norm1000 with x1<x2, y1<y2"
+    bbox = obj.get("primary_bbox")
+    if bbox is not None:
+        if not _norm1000_bbox_ok(bbox):
+            return False, "primary_bbox must be [x1, y1, x2, y2] in norm1000 with x1<x2, y1<y2"
+        px, py = [float(v) for v in point]
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        if not (x1 <= px <= x2 and y1 <= py <= y2):
+            return False, "primary_point must lie inside primary_bbox so edit and SAM2 seed use the same planner region"
     return True, None
 
 

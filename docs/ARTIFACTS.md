@@ -1,6 +1,6 @@
 # E2W Artifact Index (runs / checkpoints)
 
-> **Status snapshot: 2026-06-13.** This is a *readability index*, not a contract. It classifies the
+> **Status snapshot: 2026-06-16.** This is a *readability index*, not a contract. It classifies the
 > large artifacts under `/data/cwx/E2W/{runs,checkpoints}` so it's clear which are current evidence,
 > which are kept for history, which are wired into current tools, and which are unreferenced cleanup
 > candidates.
@@ -69,7 +69,7 @@
 | `audit_gold_train_v6`, `audit_gold_eval_v6` | 13M / 1.5M | **ARCHIVED-REF** | v6 teacher-gold audit |
 | `e2w_A6_*`, `e2w_A7_*` self-correction (manual) | 80K–224K | **ARCHIVED-REF** | Cited in archived A6 self-correction doc |
 | `e2w_v0_3_quad_vace_add_0076_*` | ~35M | **ARCHIVED-REF** | Referenced by prefix in archived CONTRACT / v0.3 status |
-| `add_pipeline_interface_add_bg_000001_20260609T024340Z` | 18M | **STALE-DOC** | Superseded add v1 (remove-residue prompt gap); cited STATUS/ledger/README |
+| `add_pipeline_interface_add_bg_000001_20260609T024340Z` | 18M | **STALE-DOC** | Superseded add v1 (remove-residue prompt gap); cited STATUS/ledger as historical only |
 | `e2w_v0_2b_qwen_vace_smoke_promptfix` | 620M | **CLEANUP-CAND** | v0.2 smoke; no tracked reference |
 | `e2w_v0_2_contract_dry_codex` | 589M | **CLEANUP-CAND** | v0.2 dry run |
 | `counterfactual_bridge_skipvace_5_*` (×2) | 212M ea | **CLEANUP-CAND** | Interim 5-sample bridge runs (superseded by the 30 gate) |

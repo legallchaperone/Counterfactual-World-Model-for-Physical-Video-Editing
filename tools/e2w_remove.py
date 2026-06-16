@@ -198,6 +198,8 @@ def main() -> int:
         try:
             if not target_ref:
                 raise RuntimeError("planner did not produce target_ref")
+            if not item["schema_valid"]:
+                raise RuntimeError(f"planner schema invalid: {item.get('validation_error')}")
             bbox, confidence = core.detect_bbox(
                 dino_model, anchor, target_ref, box_threshold=args.dino_box_threshold, text_threshold=args.dino_text_threshold
             )
@@ -242,6 +244,17 @@ def main() -> int:
             parsed = item["parsed"]
             if isinstance(parsed, dict):
                 vace_prompt, vace_prompt_valid, vace_prompt_error = render_vace_prompt_from_v8(parsed, video_id)
+            if not vace_prompt_valid:
+                record.update(
+                    {
+                        "vace_prompt": vace_prompt,
+                        "vace_prompt_preview": vace_prompt[:60],
+                        "vace_prompt_valid": vace_prompt_valid,
+                        "vace_prompt_error": vace_prompt_error,
+                        "vace_info": {"skipped": True, "reason": vace_prompt_error},
+                    }
+                )
+                raise RuntimeError(f"invalid vace_prompt: {vace_prompt_error}")
 
             first_frame_edit_ok = False
             edited_frame_path: str | None = None
@@ -289,10 +302,38 @@ def main() -> int:
                     sample_steps=args.vace_sample_steps,
                     control_branch_checkpoint=args.control_branch_checkpoint,
                 )
+                if vace_output_path is None:
+                    raise RuntimeError(f"VACE command failed; see {vace_info.get('stderr_path')}")
+                if not Path(vace_output_path).exists() or Path(vace_output_path).stat().st_size <= 0:
+                    raise RuntimeError(f"VACE command did not produce a non-empty edited_video: {vace_output_path}")
+                temporal_alignment_method = (
+                    "source_frame_count_already_wan_4n_plus_1"
+                    if vace_frame_count == len(frames)
+                    else "source_frame_count_padded_to_next_wan_4n_plus_1"
+                )
+                alignment = core.vace_alignment_metadata(
+                    frame_num=vace_frame_count,
+                    height=height,
+                    width=width,
+                    quadmask=vace_quadmask,
+                    generation_mask=vace_generation_mask,
+                    temporal_alignment_method=temporal_alignment_method,
+                    spatial_alignment_method=(
+                        "quadmask resolution from original-frame grounding; conditioning first frame resized to quadmask HxW "
+                        "if needed; generation_mask synthesized at quadmask HxW"
+                    ),
+                    source_frame_count=len(frames),
+                )
                 vace_info.update(
                     {
                         "legacy_backend_arg_adapter_used": True,
                         "vace_frame_count": vace_frame_count,
+                        "conditioning_video_shape": alignment["conditioning_video_shape"],
+                        "quadmask_shape": alignment["quadmask_shape"],
+                        "generation_mask_shape": alignment["generation_mask_shape"],
+                        "alignment_required": alignment["alignment_required"],
+                        "alignment_method": alignment["alignment_method"],
+                        "alignment": alignment,
                         "vace_runtime_inputs": {
                             "vace_conditioning_video": str(vace_conditioning_video_path),
                             "quadmask_npy": str(vace_quadmask_path),
@@ -306,6 +347,7 @@ def main() -> int:
                             "vace_conditioning_video": conditioning_metadata,
                             "quadmask": core.mask_metadata(vace_quadmask),
                             "generation_mask": core.generation_mask_metadata(vace_generation_mask),
+                            "alignment": alignment,
                         },
                     }
                 )
@@ -331,6 +373,12 @@ def main() -> int:
                     "first_frame_edit_info": first_frame_edit_info,
                     "vace_output_path": vace_output_path,
                     "vace_info": vace_info,
+                    "conditioning_video_shape": vace_info.get("conditioning_video_shape"),
+                    "quadmask_shape": vace_info.get("quadmask_shape"),
+                    "generation_mask_shape": vace_info.get("generation_mask_shape"),
+                    "alignment_required": vace_info.get("alignment_required"),
+                    "alignment_method": vace_info.get("alignment_method"),
+                    "alignment": vace_info.get("alignment"),
                     "debug_grounding": str(grounding_path),
                     "debug_masks": mask_debug_paths,
                     "debug_quadmask": str(quadmask_debug_path),

@@ -1,5 +1,7 @@
 # Add Pipeline INTERFACE Experiment Spec
 
+> Archived 2026-06-16. Superseded by `docs/UNIFIED_PIPELINE_RUNBOOK.md` and the unified `tools/e2w_add.py` interface. This file is historical only.
+
 Status: draft for user review  
 Branch/worktree: `feat/add-pipeline` at `/home/cwx/E2W/.worktree/feat/add-pipeline`  
 Scope: experiment implementation only; do not change `main` until PR review

@@ -235,6 +235,7 @@ def main() -> int:
     args = parse_args()
     if args.cuda_visible_devices:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
+    frame_num_was_default = args.frame_num is None
     if args.frame_num is not None:
         ensure_frame_num(args.frame_num)
     if not args.source_video.exists():
@@ -291,6 +292,8 @@ def main() -> int:
     )
     edit_info["instruction"] = edit_instruction
     edit_info["inpaint_box_px"] = inpaint_box_px
+    edit_info["inpaint_mask_npy"] = str(run_dir / "inpaint_mask.npy")
+    edit_info["inpaint_mask_png"] = str(run_dir / "inpaint_mask.png")
 
     # Add grounding: SAM2 on the EDITED first frame seeded by the planner point (tested path).
     mask_dir = run_dir / "add_quadmask"
@@ -371,7 +374,29 @@ def main() -> int:
     )
     if vace_output is None:
         raise RuntimeError(f"VACE command failed; see {vace_info.get('stderr_path')}")
+    if not edited_video.exists() or edited_video.stat().st_size <= 0:
+        raise RuntimeError(f"VACE command did not produce a non-empty edited_video: {edited_video}")
     control_branch = core.control_branch_info_from_context(vace_info)
+    source_frame_count = int(source_meta.get("frame_count") or args.frame_num)
+    if source_frame_count == args.frame_num:
+        temporal_alignment_method = "source_frame_count_already_wan_4n_plus_1"
+    elif frame_num_was_default:
+        temporal_alignment_method = "source_frame_count_rounded_down_to_wan_4n_plus_1"
+    else:
+        temporal_alignment_method = "explicit_frame_num_provided_by_user"
+    alignment = core.vace_alignment_metadata(
+        frame_num=args.frame_num,
+        height=height,
+        width=width,
+        quadmask=quadmask,
+        generation_mask=generation_mask,
+        temporal_alignment_method=temporal_alignment_method,
+        spatial_alignment_method=(
+            "quadmask resolution from SAM2 edited-first-frame grounding; conditioning first frame resized to quadmask HxW "
+            "if needed; generation_mask synthesized at quadmask HxW"
+        ),
+        source_frame_count=source_frame_count,
+    )
 
     metadata = {
         "evidence_level": "INTERFACE",
@@ -393,6 +418,13 @@ def main() -> int:
         "target_ref": target_ref,
         "vace_prompt": vace_prompt,
         "frame_num": args.frame_num,
+        "frame_num_was_defaulted": frame_num_was_default,
+        "conditioning_video_shape": alignment["conditioning_video_shape"],
+        "quadmask_shape": alignment["quadmask_shape"],
+        "generation_mask_shape": alignment["generation_mask_shape"],
+        "alignment_required": alignment["alignment_required"],
+        "alignment_method": alignment["alignment_method"],
+        "alignment": alignment,
         "qwen_edit": {"used": True, "edited_first_frame": str(edited_first_frame), "info": edit_info},
         "vace_conditioning_video": conditioning_meta,
         "sam2": sam2_info,

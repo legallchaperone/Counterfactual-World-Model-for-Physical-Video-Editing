@@ -28,6 +28,7 @@ For a quick human orientation, start here. For operational details, use the cano
 | `docs/E2W_SPEC.md` | humans + agents | single current runtime contract |
 | `STATUS.md` | humans + agents | current operational status and blockers |
 | `docs/E2W_PROJECT_LEDGER.md` | humans + agents | durable project decisions and evidence ledger |
+| `docs/UNIFIED_PIPELINE_RUNBOOK.md` | humans + agents | fixed current commands for remove/add/add-then-remove |
 | `AGENTS.md` | agents | rules for coding/research agents working in this repo |
 
 Historical specs, handoffs, and old runbooks live under `docs/archive/`. They are useful for archaeology, but not current constraints.
@@ -96,32 +97,24 @@ See `docs/E2W_SPEC.md` for the precise rules.
 
 See `STATUS.md` for the latest details. Short version:
 
-- Counterfactual Planner is the current correct planner design.
-- Archived executable-planner artifacts are archived references only, not current baselines.
-- The main blocker is making the Counterfactual Planner grounding bridge and runtime adapter conform to the current spec.
-- The VACE control-branch training path is separate and still needs corrected real training plus control/visual validation.
-- The add pipeline now has an **INTERFACE-level** smoke success.
+- The current public interfaces are unified into three entry points: `tools/e2w_remove.py`, `tools/e2w_add.py`, and `tools/e2w_add_then_remove.py`.
+- All three share `tools/e2w_pipeline_core.py` and emit the same six-input VACE runtime contract.
+- Deprecated legacy names are shims only: `tools/run_counterfactual_planner_pipeline.py`, `tools/run_add_pipeline_interface.py`, and `tools/run_add_then_remove_pipeline.py`.
+- Add is first-class: add planner output drives masked inpaint first-frame editing, then SAM2 grounds the inserted object on the edited first frame with a change-overlap consistency guard.
+- Current add/add-then-remove runs are still **INTERFACE** evidence unless separately reviewed/tested. Control, visual, and research evidence are not established.
 
-Verified add INTERFACE run:
+What an INTERFACE run proves:
 
-```text
-/data/cwx/E2W/runs/add_pipeline_interface_add_bg_000001_20260609T024340Z
-```
-
-What that run proves:
-
-- original video + user prompt reached actual planner/model inference;
+- original/upstream context reached actual planner/model inference;
 - `vace_prompt` came from the planner/model and was passed through unchanged;
-- Qwen Edit produced an edited first frame;
-- SAM2 produced an add quadmask from the edited first frame;
-- `quadmask.npy` and full-domain `generation_mask` had correct shape/value contracts;
-- VACE produced a non-empty `edited_video.mp4`.
+- first-frame edit, `quadmask_npy`, full-domain `generation_mask`, and VACE invocation completed;
+- metadata records the current six runtime inputs and alignment.
 
 What it does **not** prove:
 
 - visual quality;
-- learned planner add quality;
-- learned VACE add semantics;
+- learned planner generalization;
+- learned VACE add/remove semantics;
 - physical correctness.
 
 ## Evidence Levels
@@ -139,32 +132,33 @@ RESEARCH   = ablation-backed evidence supports a paper-level claim
 
 A generated `edited_video.mp4` is INTERFACE evidence unless separately reviewed or tested.
 
-## Running the Current Add Interface Smoke
+## Fixed Runbook
 
-Use this only as an interface check, not as a visual-quality benchmark.
+The fixed current runbook is `docs/UNIFIED_PIPELINE_RUNBOOK.md`.
+
+Minimal add smoke shape:
 
 ```bash
 cd /home/cwx/E2W
+export PY=/data/cwx/conda/envs/edit2world-phase1-real/bin/python
+export ADD_PLANNER=/data/cwx/E2W/checkpoints/vlm_planner_lora_add_v1_20260615
+export CONTROL_BRANCH=/data/cwx/E2W/checkpoints/v04_real_overfit_14b_specfix_selfinsert_20260612
 CUDA_VISIBLE_DEVICES=<gpu> PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python tools/e2w_add.py \
-  --planner-adapter <add-planner-lora> \
-  --cuda-visible-devices <gpu> \
-  --frame-num 21 \
-  --planner-attempts 3 \
-  --qwen-steps 5 \
-  --vace-sample-steps 2
+$PY tools/e2w_add.py \
+  --source-video <source_video.mp4> \
+  --user-prompt "Add a red mug on the table near the center of the image." \
+  --sample-id <sample_id> \
+  --run-dir /data/cwx/E2W/runs/e2w_add_<sample_id> \
+  --planner-adapter "$ADD_PLANNER" \
+  --control-branch-checkpoint "$CONTROL_BRANCH" \
+  --cuda-visible-devices <gpu>
 ```
 
-The three unified interfaces are `tools/e2w_remove.py`, `tools/e2w_add.py`, and
-`tools/e2w_add_then_remove.py`, all built on `tools/e2w_pipeline_core.py`. The add
-interface requires an add-trained planner adapter (`--planner-adapter`); there is no
-archived default.
-
-Unit test:
+Validation:
 
 ```bash
 cd /home/cwx/E2W
-/data/cwx/conda/envs/edit2world-phase1-real/bin/python -m unittest tests.test_add_pipeline_interface
+$PY -m unittest discover -s tests -p 'test*.py'
 ```
 
 Project locations on `cwx`:

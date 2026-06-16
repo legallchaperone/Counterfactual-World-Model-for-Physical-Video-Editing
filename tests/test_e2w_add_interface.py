@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -78,6 +79,37 @@ class E2WAddInterfaceTests(unittest.TestCase):
         for bad in (20, 0, -1, 22):
             with self.assertRaises(ValueError):
                 e2w_add.ensure_frame_num(bad)
+
+    def test_inpaint_edit_metadata_records_mask_consumed(self) -> None:
+        import numpy as np
+        import torch
+        from PIL import Image
+
+        class FakeInpaintPipeline:
+            @classmethod
+            def from_pretrained(cls, _checkpoint: str, torch_dtype: object) -> "FakeInpaintPipeline":
+                return cls()
+
+            def __call__(self, *_args: object, **_kwargs: object) -> object:
+                return SimpleNamespace(images=[Image.new("RGB", (4, 4), "white")])
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            image = root / "input.png"
+            out = root / "edited.png"
+            Image.new("RGB", (4, 4), "black").save(image)
+            mask = np.zeros((4, 4), dtype=np.uint8)
+            mask[1:3, 1:3] = 255
+            fake_diffusers = SimpleNamespace(QwenImageEditInpaintPipeline=FakeInpaintPipeline)
+            with (
+                mock.patch.dict(sys.modules, {"diffusers": fake_diffusers}),
+                mock.patch.object(torch.cuda, "is_available", return_value=False),
+            ):
+                info = e2w_add.core.edit_first_frame_inpaint(image, "Add a mug.", mask, out, qwen_checkpoint=root / "fake")
+
+        self.assertTrue(info["target_mask_consumed_by_backend"])
+        self.assertTrue(info["inpaint_mask_consumed_by_backend"])
+        self.assertEqual(info["mask_shape"], [4, 4])
 
     def test_wan_frame_num_at_most_matches_source(self) -> None:
         self.assertEqual(e2w_add.wan_frame_num_at_most(81), 81)  # already 4n+1
