@@ -6,6 +6,13 @@
 
 ## 总结
 
+2026-06-16 更新（feat/unify-pipeline-interfaces 分支）：
+
+- 接口统一为三个：`tools/e2w_remove.py` / `e2w_add.py` / `e2w_add_then_remove.py`，共享 `tools/e2w_pipeline_core.py`；add 新路径已弃用 v6/eval_vlm_planner，旧脚本保留为 shim。
+- add planner LoRA v1（`vlm_planner_lora_add_v1_20260615`）：self-insertion 反演 bootstrap SFT。证据等级 **仅 TRAINING**——eval 退化（train/eval 12 物体重叠且每物体标签逐字相同），不证明泛化。
+- add 一等公民设计：first-frame edit 改为 **planner-bbox 约束的 masked inpaint**（物体只在 planner 选定区域生成），SAM2 同点 grounding + 一致性守卫；e2w_add 端到端 INTERFACE smoke 通过（overlap 0.796，产出 edited_video）。
+- **诚实边界**：该 smoke 仅 INTERFACE。VACE 生成质量差、对 quadmask 把控不稳（base VACE + sample_steps=2，未接 trained control branch）；要让 VACE 真正吃准 quadmask 需要大规模 control-branch 训练。control/visual/research 均不成立。
+
 当前已有一条 Counterfactual Planner -> grounding bridge -> current VACE runtime 的 remove-side INTERFACE smoke。仍不能声称 control / visual / research 成功。
 
 - 当前正确 planner 设计是 Counterfactual Planner；兼容 schema id 为 `e2w.planner_output.v8_tool_augmented_grounding.v1`。

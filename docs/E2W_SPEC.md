@@ -116,9 +116,9 @@ Rules:
 Add uses a different grounding order than remove. Because the new object does not exist in the source video, grounding happens *after* the first-frame edit:
 
 ```text
-planner.target_ref + planner.primary_point
-  -> first-frame edit that adds the object
-  -> SAM2 on the edited first frame, seeded by primary_point
+planner.target_ref + planner.primary_bbox/primary_point
+  -> masked inpaint first-frame edit (object generated ONLY inside the planner region)
+  -> SAM2 on the edited first frame, seeded by primary_point (inside that region)
   -> quadmask_npy (Q0 = inserted object region)
 
 planner.vace_prompt
@@ -130,7 +130,8 @@ planner.edit_type
 
 Rules:
 
-- The first-frame edit materializes the added object; SAM2 then grounds the added object on the edited first frame, not on the original video.
+- The first-frame edit is a **masked inpaint** constrained to the planner's `primary_bbox` (or a box around `primary_point`): the object is generated only inside that region, so the edit obeys the planner's chosen location rather than letting the image editor place the object freely. This keeps the edit and the SAM2 seed consistent (placement quality is therefore bounded by planner quality).
+- SAM2 then grounds the added object on the edited first frame, not on the original video. A consistency guard requires the SAM2 primary to overlap the edited-vs-original change region; otherwise the run fails loudly instead of producing a meaningless Q0.
 - The generated `quadmask_npy` must still satisfy the Quadmask section, with Q0 = the inserted object region.
 - `vace_prompt` must pass the add prompt rules in this spec.
 - The downstream runtime `operation` must be `add`.
